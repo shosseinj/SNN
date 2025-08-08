@@ -1,0 +1,7 @@
+INFO:root:#### Creating the model ####
+INFO:root:#### Setting SNN intervals ####
+INFO:root:#### Initial test set accuracy testing ####
+INFO:root:Initial testing accuracy is [<tf.Tensor: shape=(), dtype=float64, numpy=0.06807672447281865>, {'dense_output_accuracy': <tf.Tensor: shape=(), dtype=float64, numpy=0.1028>}].
+INFO:root:#### Training ####
+INFO:root:#### Final test set accuracy testing ####
+INFO:root:Final testing accuracy is [<tf.Tensor: shape=(), dtype=float64, numpy=-2.1291034120239956>, {'dense_output_accuracy': <tf.Tensor: shape=(), dtype=float64, numpy=0.968>}].

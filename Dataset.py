@@ -1,6 +1,6 @@
 import numpy as np
 import tensorflow as tf
-
+import numpy as np
 
 class Dataset:
     def __init__(
@@ -30,7 +30,12 @@ class Dataset:
             self.q, self.p = 1.0, 0.0
             self.num_of_classes = 10
             if self.name=='MNIST':
-                (self.x_train, self.y_train), (self.x_test, self.y_test) = tf.keras.datasets.mnist.load_data()
+                # (self.x_train, self.y_train), (self.x_test, self.y_test) = tf.keras.datasets.mnist.load_data()
+                with np.load('./mnist.npz') as data:
+                    self.x_train = data['x_train']
+                    self.y_train = data['y_train']
+                    self.x_test = data['x_test']
+                    self.y_test = data['y_test']
             else:
                 (self.x_train, self.y_train), (self.x_test, self.y_test) = tf.keras.datasets.fashion_mnist.load_data()
             self.x_train, self.x_test = self.x_train/255.0, self.x_test/255.0

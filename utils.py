@@ -1,346 +1,308 @@
-import logging
-import os
-import sys
-import numpy as np
 import tensorflow as tf
+from tensorflow.keras.layers import Input, Conv2D, BatchNormalization, Activation, MaxPool2D, Dropout, Flatten, Dense, InputLayer
+from tensorflow.keras.models import Model
+import numpy as np
 
 
-def set_up_logging(logging_dir, model_name):
-    """
-    Set up logging for the simulation.
-    """
-    os.makedirs(logging_dir, exist_ok=True)
-    logging.basicConfig(
-        level=logging.DEBUG,
-        handlers=[
-           logging.FileHandler(logging_dir + f'/{model_name}_log.txt', mode='w'),
-           logging.StreamHandler(sys.stdout),
-        ],
-    )
-    mpl_logger = logging.getLogger("matplotlib")
-    mpl_logger.setLevel(logging.WARNING)
+class Conv2DWithBias(tf.keras.layers.Layer):
+    def __init__(self, filters, kernel_size, strides=(1, 1), padding='valid', **kwargs):
+        super().__init__(**kwargs)
+        self.filters = filters
+        self.kernel_size = kernel_size
+        self.strides = strides
+        self.padding = padding
+        self.use_custom_bias = False
 
-
-def get_optimizer(lr):
-    """
-    Get optimizer for the training on MNIST/Fashion-MNIST dataset.
-    """
-    learning_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
-        initial_learning_rate=lr,
-        decay_steps=5000,  
-        decay_rate=0.9, 
-    )
-    optimizer = tf.keras.optimizers.Adam(learning_rate=learning_schedule) 
-    return optimizer
-
-
-class Conv2DWithBias(tf.keras.layers.Conv2D):
-    """
-    Convolutional layer with potentially different bias at different locations.
-    """
     def build(self, input_shape):
+        kernel_shape = self.kernel_size + (input_shape[-1], self.filters)
+        self.kernel = self.add_weight(
+            name="kernel",
+            shape=kernel_shape,
+            initializer="glorot_uniform",
+            trainable=True
+        )
+        self.bias = self.add_weight(
+            name="bias",
+            shape=(9, self.filters),
+            initializer="zeros",
+            trainable=True
+        )
+        self.std_bias = self.add_weight(
+            name="std_bias",
+            shape=(self.filters,),
+            initializer="zeros",
+            trainable=True
+        )
+        self.BN = self.add_weight(
+            name="BN",
+            shape=(1,),
+            initializer="zeros",
+            trainable=False
+        )
+        self.BN_before_ReLU = self.add_weight(
+            name="BN_before_ReLU",
+            shape=(1,),
+            initializer="zeros",
+            trainable=False
+        )
         super().build(input_shape)
-        # These two variables determine the processing of the layer.
-        self.BN=tf.Variable(tf.constant([0]), name='BN', trainable=False)
-        self.BN_before_ReLU=tf.Variable(tf.constant([0]), name='BN_before_ReLU', trainable=False)
-        
-    def set_bias(self, bias, W=None, b_term=[0.0]):
-        """
-        Creates bias variable and changes bias on certain locations when needed.
-        """
-        # The bias Variable is added in this function and can have 9 potential values for each filter.
-        # W can represent the kernel before fusion and b_term corresponds to the term which is multiplied with kernel (see Eqs. 9, 11, etc.).  
-        self.bias = self.add_weight(shape=(9, self.filters), initializer='zeros', dtype=tf.float64, name='bias')
-        self.use_custom_bias = True
-        self.use_bias = False  # disable standard bias logic
-        if W is not None: 
-            # Calculate the overall kernel summation.
-            W_sum_2D  = tf.math.reduce_sum(W, axis=(0, 1))
-            b_term = b_term[:tf.shape(W)[2]]
-        for i in range(9):
-            # delta_sum_W calculates kernel summation of the weights which correspond to the zero-padded inputs for the particular image part. 
-            if i==0:
-                # This branch corresponds to the inner part of the image which has unchanged bias.
-                b_term=tf.cast(b_term, dtype=tf.float64)
-                # delta_sum_W is equal to 0 which yields unchanged bias.
-                delta_sum_W = tf.zeros((tf.shape(b_term)[0], 1), dtype=tf.float64)
-            elif i==1:
-                # This branch corresponds to the top left corner of the image, etc. 
-                delta_sum_W = (W_sum_2D - tf.reduce_sum(W[1:, 1:, :, :], axis=[0, 1]))
-            elif i==2:
-                delta_sum_W = tf.reduce_sum(W[:1, :, :, :], axis=[0, 1])
-            elif i==3:
-                delta_sum_W = (W_sum_2D - tf.reduce_sum(W[1:, :-1, :, :], axis=[0, 1]))
-            elif i==4:
-                 delta_sum_W = tf.reduce_sum(W[:, -1:, :, :], axis=[0, 1])
-            elif i==5:
-                delta_sum_W = (W_sum_2D - tf.reduce_sum(W[:-1, :-1, :, :], axis=[0, 1]))
-            elif i==6:
-                delta_sum_W = tf.reduce_sum(W[-1:, :, :, :], axis=[0, 1])
-            elif i==7:
-                delta_sum_W = (W_sum_2D - tf.reduce_sum(W[:-1, 1:, :, :], axis=[0, 1]))
-            elif i==8:
-                delta_sum_W = tf.reduce_sum(W[:, :1, :, :], axis=[0, 1])
-            # See Eqs. 11, 14.  
-            delta_bias = tf.reduce_sum(tf.matmul(tf.linalg.diag(b_term), delta_sum_W), axis=0)
-            # The bias is decreased for the value which corresponds to the terms which come from zero-padding. 
-            self.bias[i].assign(bias - delta_bias)
-            # When padding=='valid' or there is no batch normalization layer, or the batch normalization layer is fused with the previous convolutional layer, all locations have the same bias and we break from the for loop. 
-            if self.padding=='valid' or self.BN!=1 or self.BN_before_ReLU==1: break
-                
+
     def call(self, inputs):
-        # Convolution operation is initially called. 
-        #result = self._convolution_op(inputs, self.kernel)  #incompatible with never TF
-        result = super().call(inputs)
+        x = tf.nn.conv2d(inputs, self.kernel, strides=self.strides, padding=self.padding.upper())
         if self.use_custom_bias:
-            if self.padding=='valid' or self.BN!=1 or self.BN_before_ReLU==1:
-                #When padding=='valid' or there is no batch normalization layer, or the batch normalization layer is fused with the previous convolutional layer, all locations have the same bias.
-                result=result + self.bias[0]
+            batch_size = tf.shape(x)[0]
+            h, w = tf.shape(x)[1], tf.shape(x)[2]
+            h_step = h // 3
+            w_step = w // 3
+
+            output = tf.identity(x)  # safe copy
+
+            for i in range(3):
+                for j in range(3):
+                    region_idx = i * 3 + j
+                    region_bias = self.bias[region_idx]  # shape (filters,)
+
+                    h_start, h_end = i * h_step, (i + 1) * h_step
+                    w_start, w_end = j * w_step, (j + 1) * w_step
+
+                    output_slice = output[:, h_start:h_end, w_start:w_end, :]
+                    output_slice += region_bias  # broadcasting
+
+                    mesh = tf.meshgrid(
+                        tf.range(batch_size),
+                        tf.range(h_start, h_end),
+                        tf.range(w_start, w_end),
+                        indexing='ij'
+                    )
+                    indices = tf.reshape(tf.stack(mesh, axis=-1), [-1, 3])
+                    updates = tf.reshape(output_slice, [-1, self.filters])
+
+                    output = tf.tensor_scatter_nd_update(output, indices, updates)
+
+            x = output + self.std_bias
+        return x
+    def set_bias(self, bias, W=None, b_term=None):
+        self.use_custom_bias = True
+
+        bias = tf.convert_to_tensor(bias, dtype=tf.float32)
+        bias = tf.reshape(bias, (-1,))  # shape (filters,)
+
+        if W is not None:
+            W = tf.convert_to_tensor(W, dtype=tf.float32)
+            if b_term is None:
+                b_term = tf.zeros((W.shape[3],), dtype=tf.float32)  # note axis 3 = filters
             else:
-                #Otherwise we add different bias to 9 different locations.
-                result_0 = result[:, 1:-1, 1:-1, :] + self.bias[0]
-                result_1 = result[:, :1, :1, :] + self.bias[1]
-                result_2 = result[:, :1, 1:-1, :] + self.bias[2]
-                result_3 = result[:, :1, -1:, :] + self.bias[3]
-                result_4 = result[:, 1:-1, -1:, :] + self.bias[4]
-                result_5 = result[:, -1:, -1:, :] + self.bias[5]
-                result_6 = result[:, -1:, 1:-1, :] + self.bias[6]
-                result_7 = result[:, -1:, :1, :] + self.bias[7]
-                result_8 = result[:, 1:-1, :1, :] + self.bias[8]
-                # Parts of image are concatenated to generate a complete output.
-                top_row = tf.concat([result_1, result_2, result_3], axis=2)
-                middle = tf.concat([result_8, result_0, result_4], axis=2)
-                bottom_row = tf.concat([result_7, result_6, result_5], axis=2)
-                result = tf.concat([top_row, middle, bottom_row], axis=1)
-        return result  
+                b_term = tf.convert_to_tensor(b_term[:W.shape[3]], dtype=tf.float32)
 
+            b_term = tf.reshape(b_term, (-1,))  # shape (filters,)
 
-class MaxMinPool2D(tf.keras.layers.MaxPool2D):
-    """
-    Max Pooling or Min Pooling operation, depends on the sign of the batch normalization layer before.
-    """
-    def build(self, input_shape):
-        super().build(input_shape)
-        # By default the sign is set to 1, which yields max pooling functionality.
-        # The sign variable can be changed for some channels when batch normalization is fused with the next convolutonal layer and it changes the sign of the weights. 
-        self.sign=tf.Variable(tf.constant(np.ones((1, 1, 1, input_shape[-1]))), dtype=tf.float64, name='sign', trainable=False)
-    def call(self, inputs):
-        # Max pooling functionality is called on (self.sign*inputs) input. 
-        return super().call(self.sign*inputs)*self.sign
+            for i in range(9):
+                if i == 0:
+                    delta_sum_W = tf.zeros((W.shape[3],), dtype=tf.float32)
+                elif i == 1:
+                    delta_sum_W = tf.reduce_sum(W, axis=(0, 1, 2))  # sum height, width, input channels
+                else:
+                    delta_sum_W = tf.zeros((W.shape[3],), dtype=tf.float32)
 
+                delta_sum_W = tf.reshape(delta_sum_W, (-1,))  # shape (filters,)
+                delta_bias = b_term * delta_sum_W
 
-def copy_layer(orig_layer):
-    """
-    Deep copy of a layer with MaxPooling2D layer being replaced with MaxMinPool2D and Conv2D with Conv2DWithBias layer.
-    """
-    config = orig_layer.get_config()
-    if 'pool' in orig_layer.name:
-        layer = MaxMinPool2D()
-    elif 'conv' in orig_layer.name: 
-        config['use_bias']=False
-        layer = Conv2DWithBias.from_config(config)
-    else:
-        layer = type(orig_layer).from_config(config)
-    layer.build(orig_layer.input_shape)
-    return layer
+                # Debug print to verify shapes
+                tf.print(f"set_bias i={i} shapes:", 
+                        "bias:", tf.shape(bias), bias,
+                        "delta_bias:", tf.shape(delta_bias), delta_bias)
 
+                if bias.shape != delta_bias.shape:
+                    raise ValueError(f"Shape mismatch: bias {bias.shape} vs delta_bias {delta_bias.shape}")
 
-def copy_model(fused_model, model, i):
-    """
-    Deep copy of a model and exchange Conv with Conv2DWithBias layers and MaxPool with MaxMinPool layers.
-    The layers which are not used during inference are dropped.
-    """
-    while i < len(model.layers):
-        while 'dropout' in model.layers[i].name or 'activity_regularization' in model.layers[i].name: i+=1
-        # Deep copy of layer.
-        fused_layer = copy_layer(model.layers[i])
-        if 'conv' in model.layers[i].name:
-            W, b = model.layers[i].get_weights()
-            # Set parameters of Conv2DWithBias layer.
-            fused_layer.set_weights([W, np.array([0]), np.array([0])])
-            fused_layer.set_bias(bias=b)
-        elif 'dense' in model.layers[i].name:
-            # Set parameters of fully-connected layer.
-            fused_layer.set_weights(model.layers[i].get_weights())
-        fused_model.add(fused_layer)
-        i+=1
+                adjusted_bias = bias - delta_bias
+                adjusted_bias = tf.reshape(adjusted_bias, (self.filters,))
 
-
-def fuse_bn(model, p, q, optimizer, BN = True, BN_before_ReLU = False):
-    """
-    Creates new models which:
-        Fuses all (imaginary) batch normalization layers; 
-        Changes bias on locations where it is needed; 
-        Transforms MaxPooling layers in MaxMinPooling layers and Conv2D layers in Conv2DWithBias.  
-    """
-    fused_model = tf.keras.Sequential()
-    # Add input layer.
-    fused_model.add(copy_layer(model.layers[0]))
-    i=1
-    # If condition is satisfied, there is an imaginary batch normalization layer which is merged.
-    if not (p==0 and q==1): i = fuse_imaginary_bn(fused_model, model, p, q)
-    if BN:
-        # There are batch normalization layers.
-        if BN_before_ReLU:
-            # Batch normalization layers are always found before ReLU activation function.
-            while i<len(model.layers):
-                if 'batch_norm' in model.layers[i].name:
-                    # Fuse this batch normalization layer with previous convolutional or fully-connected layer. 
-                    i = fuse_bn_before_activation(fused_model, model, i)
-                if i==(len(model.layers)-1):
-                    # Add last Dense layer with 'softmax'.
-                    layer = copy_layer(model.layers[-2])
-                    layer.set_weights(model.layers[-2].get_weights())
-                    fused_model.add(layer)
-                    fused_model.add(copy_layer(model.layers[-1]))
-                i+=1
+                self.bias[i].assign(adjusted_bias)
         else:
-            # Batch normalization layers are always found after ReLU activation function.
-            while i<len(model.layers): 
-                # Add first Dense or Convolutional layer if there was no imaginary batch normalization.
-                if (p==0 and q==1) and i==1:
-                    layer = copy_layer(model.layers[1])
-                    if 'conv' in model.layers[1].name:
-                        kernel, bias = model.layers[1].get_weights()
-                        # Set BN flag to 0 and BN_before_ReLU to 0.
-                        layer.set_weights([kernel, np.array([0]), np.array([0])])
-                        # Bias is same for all locations.
-                        layer.set_bias(bias)
-                    else:
-                        layer.set_weights(model.layers[1].get_weights())
-                    fused_model.add(layer)
-                    fused_model.add(copy_layer(model.layers[2]))
-                if 'batch_norm' in model.layers[i].name:
-                    # Fuse this batch normalization layer with next convolutional or fully-connected layer.
-                    i = fuse_bn_after_activation(fused_model, model, i)
-                i+=1
-    else:
-        # If there is no batch normalization layers, copy model such that Conv2D and MaxPooling layers are replaced with ConvWithBias and MaxMinPooling respectively. 
-        copy_model(fused_model, model, i)
-    fused_model.compile(metrics=['accuracy'], loss=tf.keras.losses.CategoricalCrossentropy(from_logits=True), optimizer=optimizer)  
-    return fused_model
+            for i in range(9):
+                self.bias[i].assign(bias)
 
 
-def fuse_imaginary_bn(fused_model, model, p, q): 
-    """
-    Fuse an imaginary batch normalization layer due to an input on arbitrary [p, q] range different from [0, 1].
-    """
-    first_layer = model.layers[1]
-    input_image_shape, _, input_channels, _ = tf.shape(first_layer.kernel)
-    kappa = tf.cast(tf.fill((input_channels), value=q-p), dtype=tf.float64)
-    b_term=tf.cast(tf.fill((input_channels), value=p), dtype=tf.float64)
-    if 'conv' in first_layer.name:
-        kappa=tf.tile(kappa, [input_image_shape**2])
-        b_term=tf.tile(b_term, [input_image_shape**2])
-    W = tf.reshape(first_layer.kernel, (-1, first_layer.filters))
-    kappa = tf.linalg.diag(kappa)
-    W_fused = tf.matmul(kappa, W)
-    # See Eq. 13. 
-    W_fused = tf.reshape(W_fused, tf.shape(first_layer.kernel))   
-    # See Eq. 12. 
-    b_fused = first_layer.bias + tf.reduce_sum(tf.matmul(tf.linalg.diag(b_term), W), axis=0)
-    # Copy first convolutional or fully-connected layer.
-    layer = copy_layer(first_layer)
-    if 'conv' in first_layer.name:
-        # Set BN flag to 1 and BN_before_ReLU to 0.
-        layer.set_weights([W_fused, np.array([1]), np.array([0])])
-        # Create bias which will have 9 different values. 
-        # Those values are generated by subtracting from b_fused the terms which come through padded input.
-        # The obtained results is in Eq. 14. 
-        layer.set_bias(bias=b_fused, W=first_layer.kernel, b_term=b_term)
-    else:
-        layer.set_weights([W_fused, b_fused])
-    fused_model.add(layer)
-    fused_model.add(copy_layer(model.layers[2]))  
-    return 3
+class MaxMinPool2D(tf.keras.layers.Layer):
+    def __init__(self, pool_size=(2, 2), strides=None, padding='valid', **kwargs):
+        super().__init__(**kwargs)
+        self.pool_size = pool_size
+        self.strides = strides or pool_size
+        self.padding = padding
+        self.sign = None
+
+    def build(self, input_shape):
+        self.sign = self.add_weight(
+            name='sign',
+            shape=(1, 1, 1, input_shape[-1]),
+            initializer='ones',
+            trainable=False,
+            dtype=tf.float32
+        )
+        super().build(input_shape)
+
+    def call(self, inputs):
+        pooled = tf.nn.max_pool2d(
+            inputs * self.sign,
+            ksize=[1, *self.pool_size, 1],
+            strides=[1, *self.strides, 1],
+            padding=self.padding.upper()
+        )
+        return pooled * self.sign
 
 
-def fuse_bn_before_activation(fused_model, model, i):
-    """
-    Fuses batch normalization layer with previous layer.
-    """
-    bn = model.layers[i]
-    kappa = tf.linalg.diag(bn.gamma/tf.sqrt(bn.epsilon + bn.moving_variance))
-    previous_layer = model.layers[i-1]
-    output_shape = tf.shape(previous_layer.kernel)[-1]
-    W = tf.reshape(previous_layer.kernel, (-1, output_shape))
-    # See Eq. 8.
-    W_fused = tf.transpose(tf.matmul(kappa, tf.transpose(W)))
-    W_fused = tf.reshape(W_fused, tf.shape(previous_layer.kernel))  
-    # See Eq. 7.
-    b_fused = bn.beta - bn.moving_mean*tf.linalg.diag_part(kappa)
-    b_fused += tf.squeeze(tf.matmul(kappa, previous_layer.bias[:, tf.newaxis]))
-    layer = copy_layer(previous_layer)
-    if 'conv' in previous_layer.name:
-        # Set BN flag to 1 and BN_before_ReLU to 1.
-        layer.set_weights([W_fused, np.array([1]), np.array([1])])
-        # Bias is same everywhere.
-        layer.set_bias(b_fused)
-    else:
-        layer.set_weights([W_fused, b_fused])
-    fused_model.add(layer)
-    fused_model.add(copy_layer(model.layers[i+1]))
-    # Skip Dropout and ActivityRegularization layers. 
-    while 'dropout' in model.layers[i+2].name or 'activity_regularization' in model.layers[i+2].name: i+=1
-    # Add Flatten layer when it appears. 
-    if 'flatten' in model.layers[i+2].name or 'pool' in model.layers[i+2].name: 
-        fused_model.add(copy_layer(model.layers[i+2]))
-        i+=1
-    return i+1
+def create_original_model(input_shape=(32, 32, 3)):
+    inputs = Input(shape=input_shape)
 
-        
-def fuse_bn_after_activation(fused_model, model, i): 
-    """
-    Fuse batch normalization with following layer.
-    """
-    bn = model.layers[i]
-    kappa = bn.gamma/tf.sqrt(bn.epsilon + bn.moving_variance)
-    # See Eq. 9. 
-    b_term = bn.beta - bn.moving_mean*kappa
-    # Skip Dropout and ActivityRegularization layers. 
-    while 'dropout' in model.layers[i+1].name: i+=1
-    # if there is a MaxPooling layer in before the next parameterized layer, the sign will be changed for the channels where it is needed. 
-    if 'max_pool' in model.layers[i+1].name:
-        mp = model.layers[i+1]
-        mmp = MaxMinPool2D() 
-        mmp.build(mp.input_shape)
-        # Change sign to the sign of kappa. 
-        mmp.sign.assign(tf.math.sign(kappa)[tf.newaxis, tf.newaxis, tf.newaxis, :])
-        fused_model.add(mmp)
-        i+=1
-        if 'dropout' in model.layers[i+1].name: i+=1
-    if 'flatten' in model.layers[i+1].name:
-        # Add Flatten layer when it appears.
-        fused_model.add(copy_layer(model.layers[i+1]))
-        ft = model.layers[i+1]
-        kappa = tf.tile(kappa, [ft.output_shape[-1]//ft.input_shape[-1]])
-        b_term = tf.tile(tf.squeeze(b_term), [ft.output_shape[-1]//ft.input_shape[-1]])
-        i+=1
-    next_layer = model.layers[i+1]
-    input_image_shape = tf.shape(next_layer.kernel)[0]
-    output_shape = tf.shape(next_layer.kernel)[-1]
-    if 'conv' in next_layer.name:
-        kappa=tf.tile(kappa, [input_image_shape**2])
-        b_term=tf.tile(b_term, [input_image_shape**2])
-    W = tf.reshape(next_layer.kernel, (-1, output_shape))
-    kappa = tf.linalg.diag(kappa)
-    # See Eq. 10. 
-    W_fused = tf.matmul(kappa, W)
-    W_fused = tf.reshape(W_fused, tf.shape(next_layer.kernel))    
-    # See Eq. 9. 
-    b_fused = next_layer.bias + tf.reduce_sum(tf.matmul(tf.linalg.diag(b_term), W), axis=0)
-    layer = copy_layer(next_layer)
-    if 'conv' in next_layer.name:
-        # Set BN flag to 1 and BN_before_ReLU to 0.
-        layer.set_weights([W_fused, np.array([1]), np.array([0])])
-        # Create bias which will have 9 different values. 
-        # Those values are generated by subtracting from b_fused the terms which come through padded input.
-        # The obtained results is in Eq. 11.
-        layer.set_bias(bias=b_fused, W=next_layer.kernel, b_term=b_term)
-    else:
-        layer.set_weights([W_fused, b_fused])
-    fused_model.add(layer)
-    if (i+1)!=len(model.layers)-1:
-        fused_model.add(copy_layer(model.layers[i+2])) 
-    return i+2
+    x = Conv2D(64, (3, 3), padding='same')(inputs)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x)
+    x = Dropout(0.2)(x)
 
+    x = Conv2D(64, (3, 3), padding='same')(x)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x)
+    x = Dropout(0.2)(x)
+    x = MaxPool2D((2, 2))(x)
+
+    x = Conv2D(128, (3, 3), padding='same')(x)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x)
+    x = Dropout(0.2)(x)
+
+    x = Conv2D(128, (3, 3), padding='same')(x)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x)
+    x = Dropout(0.2)(x)
+    x = MaxPool2D((2, 2))(x)
+
+    x = Conv2D(256, (3, 3), padding='same')(x)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x)
+
+    x = Flatten()(x)
+    outputs = Dense(10, activation='softmax')(x)
+
+    return Model(inputs, outputs)
+
+
+def fuse_bn_functional(original_model):
+    inputs = Input(shape=original_model.input_shape[1:])
+    x = inputs
+    i = 0
+    while i < len(original_model.layers):
+        layer = original_model.layers[i]
+
+        if isinstance(layer, InputLayer):
+            i += 1
+            continue
+
+        if isinstance(layer, Conv2D):
+            W_and_b = layer.get_weights()
+            W = W_and_b[0]
+            b = W_and_b[1] if len(W_and_b) > 1 else np.zeros((layer.filters,), dtype=np.float32)
+
+            if (i + 1) < len(original_model.layers) and isinstance(original_model.layers[i + 1], BatchNormalization):
+                bn_layer = original_model.layers[i + 1]
+                gamma = bn_layer.gamma.numpy()
+                beta = bn_layer.beta.numpy()
+                moving_mean = bn_layer.moving_mean.numpy()
+                moving_var = bn_layer.moving_variance.numpy()
+                epsilon = bn_layer.epsilon
+
+                kappa = gamma / np.sqrt(moving_var + epsilon)
+                b_fused = beta - moving_mean * kappa
+                W_fused = W * kappa
+
+                fused_conv = Conv2DWithBias(
+                    filters=layer.filters,
+                    kernel_size=layer.kernel_size,
+                    strides=layer.strides,
+                    padding=layer.padding,
+                    name=layer.name + '_fused'
+                )
+                fused_conv.build(x.shape)
+
+                # Weights order:
+                # kernel, bias(9, filters), std_bias(filters), BN(1,), BN_before_ReLU(1,)
+                weights = [
+                    W_fused,
+                    np.zeros((9, layer.filters), dtype=np.float32),  # bias placeholder
+                    np.zeros((layer.filters,), dtype=np.float32),   # std_bias placeholder
+                    np.zeros((1,), dtype=np.float32),                # BN
+                    np.zeros((1,), dtype=np.float32)                 # BN_before_ReLU
+                ]
+                fused_conv.set_weights(weights)
+                fused_conv.set_bias(b_fused, W=W_fused)
+
+                x = fused_conv(x)
+                i += 2
+            else:
+                conv = Conv2DWithBias(
+                    filters=layer.filters,
+                    kernel_size=layer.kernel_size,
+                    strides=layer.strides,
+                    padding=layer.padding,
+                    name=layer.name + '_fused'
+                )
+                conv.build(x.shape)
+
+                weights = [
+                    W,
+                    np.zeros((9, layer.filters), dtype=np.float32),  # bias placeholder
+                    b,                                               # std_bias placeholder (using bias here)
+                    np.zeros((1,), dtype=np.float32),                # BN
+                    np.zeros((1,), dtype=np.float32)                 # BN_before_ReLU
+                ]
+                conv.set_weights(weights)
+
+                x = conv(x)
+                i += 1
+
+        elif isinstance(layer, MaxPool2D):
+            pool = MaxMinPool2D(
+                pool_size=layer.pool_size,
+                strides=layer.strides,
+                padding=layer.padding,
+                name=layer.name + '_fused'
+            )
+            pool.build(x.shape)
+            x = pool(x)
+            i += 1
+
+        elif isinstance(layer, Activation):
+            x = Activation(layer.activation)(x)
+            i += 1
+
+        elif isinstance(layer, Flatten):
+            x = Flatten()(x)
+            i += 1
+
+        elif isinstance(layer, Dense):
+            x = Dense(layer.units, activation=layer.activation)(x)
+            i += 1
+
+        elif isinstance(layer, Dropout):
+            i += 1
+
+        else:
+            i += 1
+
+    return Model(inputs, x)
+
+
+if __name__ == "__main__":
+    original_model = create_original_model()
+    original_model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+
+    fused_model = fuse_bn_functional(original_model)
+    fused_model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+
+    test_input = np.random.rand(1, 32, 32, 3).astype(np.float32)
+    original_output = original_model.predict(test_input)
+    fused_output = fused_model.predict(test_input)
+
+    print("Original model output:", original_output)
+    print("Fused model output:", fused_output)
+    print("Max difference:", np.abs(original_output - fused_output).max())

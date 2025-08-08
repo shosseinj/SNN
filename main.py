@@ -6,6 +6,14 @@ import pickle as pkl
 from Dataset import Dataset
 from model import *
 import time
+from tensorflow.keras.layers import Lambda
+from keras.layers import Activation
+import tensorflow as tf
+from tensorflow.keras.layers import ReLU, Lambda
+import numpy as np
+import pickle as pkl
+import logging
+
 start_time = time.time()
 tf.keras.backend.set_floatx('float64') #to avoid numerical differences when comparing training of ReLU vs SNN
 override = None
@@ -19,15 +27,13 @@ parser.add_argument('--model_name', type=str, default='FC2', help='Should contai
 parser.add_argument('--lr', type=float, default=0.0005, help='Learning rate')
 parser.add_argument('--batch_size', type=int, default=8, help='Batch size')
 parser.add_argument('--epochs', type=int, default=10, help='Epochs. 0 -skip training')
-parser.add_argument('--testing', type=strtobool, default=True, help='Execute testing.')
+parser.add_argument('--testing', type=strtobool, default=False, help='Execute testing.')
 parser.add_argument('--load', type=str, default='False', help='Load before training. (True|False|custom_name.h5)')
 parser.add_argument('--save', type=strtobool, default=False, help='Store after training.')
 # Robustness parameters:
 parser.add_argument('--noise', type=float, default=0.0, help='Noise std.dev.')
 parser.add_argument('--time_bits', type=int, default=0, help='number of bits to represent time. 0 -disabled')
 parser.add_argument('--weight_bits', type=int, default=0, help='number of bits to represent weights. 0 -disabled')
-parser.add_argument('--w_min', type=float, default=-1.0, help='w_min to use if weight_bits is enabled')
-parser.add_argument('--w_max', type=float, default=1.0, help='w_max to use if weight_bits is enabled')
 parser.add_argument('--latency_quantiles', type=float, default=0.0, help='Number of quantiles to take into account when calculating t_max. 0 -disabled')
 parser.add_argument('--mode', type=str, default='', help='Ignore: A hack to address a bug in argsparse during debugging')
 args = parser.parse_known_args(override)
@@ -40,8 +46,6 @@ robustness_params={
     'noise':args.noise,
     'time_bits':args.time_bits,
     'weight_bits': args.weight_bits,
-    'w_min': args.w_min,
-    'w_max': args.w_max,
     'latency_quantiles':args.latency_quantiles
 }
 
@@ -137,18 +141,38 @@ if args.testing and args.epochs > 0:
 if args.save and 'ReLU' in args.model_type:
     logging.info("#### Saving ReLU model ####")
     # 1. Save original ReLU weights
-    model.save_weights(args.logging_dir + '/' + args.model_name + '_weights.h5')
+    model.save_weights(args.logging_dir + '/' + args.model_name + '.weights.h5')
 
     # Fuse (imaginary) batch normalization layers.
     logging.info('fuse (imaginary) BN layers')
     # shift/scale input data accordingly
     data.x_test, data.x_train = (data.x_test - data.p)/(data.q-data.p), (data.x_train - data.p)/(data.q-data.p)
     BN = 'BN' in args.model_name
-    model = fuse_bn(model, BN=BN, p=data.p, q=data.q, optimizer=optimizer)
+    model1 = fuse_bn(data, model, BN=BN, p=data.p, q=data.q, optimizer=optimizer)
+    
     logging.info(model.summary())
+    # Test with normalized input
+    sample = np.expand_dims(data.x_test[0], axis=0)  # Add batch dimension
+    # output_original = model.predict(sample)
+    # output_fused = model1.predict(sample)
 
+    def get_layer_outputs(model, input):
+        outputs = {}
+        x = input
+        for name, layer in model.named_children():  # Works for Sequential
+            x = layer(x)
+            outputs[name] = x.detach()  # Store output
+        return outputs
+
+    # Get outputs for both models
+    outputs_orig = get_layer_outputs(model, sample)
+    outputs_fused = get_layer_outputs(model1, sample)
+
+
+    # Check if outputs are close
+    # print("Outputs close?", np.allclose(output_original, output_fused, atol=1e-6))
     # 2. Save preprocessed ReLU model.
-    model.save_weights(args.logging_dir + '/' + args.model_name + '_preprocessed.h5')
+    model.save_weights(args.logging_dir + '/' + args.model_name + '_preprocessed.weights.h5')
     logging.info('saved preprocessed ReLU model')
 
     # 3. Find maximum layer outputs.
@@ -157,9 +181,15 @@ if args.save and 'ReLU' in args.model_type:
     layers_max = []
     for k, layer in enumerate(model.layers):
         if 'conv' in layer.name or 'dense' in layer.name:
-            if k!=len(model.layers)-2:
-                # Calculate X_n of the current layer.
-                layers_max.append(tf.reduce_max(tf.nn.relu(layer.output)))
+            if k != len(model.layers) - 2:
+                # Apply ReLU first
+                relu_output = ReLU()(layer.output)
+                
+                # Wrap tf.reduce_max in a Lambda layer
+                max_output = Lambda(lambda x: tf.reduce_max(x))(relu_output)
+                
+                layers_max.append(max_output)
+
     extractor = tf.keras.Model(inputs=model.inputs, outputs=layers_max)
     output = extractor.predict(data.x_train, batch_size=64, verbose=1)
     X_n = list(map(lambda x: np.max(x), output))

@@ -1,0 +1,8 @@
+INFO:root:#### Creating the model ####
+INFO:root:#### Loading weights ####
+DEBUG:h5py._conv:Creating converter from 3 to 5
+INFO:root:#### Training ####
+INFO:root:#### Saving ReLU model ####
+DEBUG:h5py._conv:Creating converter from 5 to 3
+INFO:root:fuse (imaginary) BN layers
+INFO:root:None

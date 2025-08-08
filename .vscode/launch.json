@@ -1,0 +1,37 @@
+// {
+//     "version": "0.2.0",
+//     "configurations": [
+//         {
+//             "name": "Python: Run VGG Example",
+//             "type": "python",
+//             "request": "launch",
+//             "program": "${workspaceFolder}/main.py",
+//             "args": [
+//                 "--model_type=ReLU",
+//                 "--model_name=VGG_BN_example",
+//                 "--data_name=CIFAR10",
+//                 "--load=cifar10vgg.h5",
+//                 "--save=True",
+//                 "--epochs=0"
+//             ],
+//             "console": "integratedTerminal",
+//         }
+//     ]
+// }
+
+
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Run VGG Example",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/utils.py",
+            "args": [
+
+            ],
+            "console": "integratedTerminal",
+        }
+    ]
+}

@@ -13,7 +13,10 @@ class SpikingDense(tf.keras.layers.Layer):
         self.B_n = (1 + 0.5) * X_n
         self.outputLayer=outputLayer
         self.t_min_prev, self.t_min, self.t_max=0, 0, 1
-        self.robustness_params=robustness_params
+        self.noise=robustness_params['noise']
+        self.time_bits=robustness_params['time_bits']
+        self.weight_bits =robustness_params['weight_bits'] 
+        self.w_min, self.w_max=-1.0, 1.0
         self.alpha = tf.cast(tf.fill((units, ), 1), dtype=tf.float64) 
         self.input_dim=input_dim
         self.regularizer = kernel_regularizer
@@ -40,7 +43,7 @@ class SpikingDense(tf.keras.layers.Layer):
         """
         Input spiking times tj, output spiking times ti or the value of membrane potential in case of output layer. 
         """
-        output = call_spiking(tj, self.kernel, self.D_i, self.t_min_prev, self.t_min, self.t_max, self.robustness_params)
+        output = call_spiking(tj, self.kernel, self.D_i, self.t_min, self.t_max, noise=self.noise)
         # In case of the output layer a simple integration is applied without spiking. 
         if self.outputLayer:
             # Read out the value of membrane potential at time t_min.
@@ -60,7 +63,10 @@ class SpikingConv2D(tf.keras.layers.Layer):
         self.initializer = kernel_initializer
         self.B_n = (1 + 0.5) * X_n
         self.t_min_prev, self.t_min, self.t_max=0, 0, 1
-        self.robustness_params=robustness_params['time_bits']
+        self.w_min, self.w_max=-1.0, 1.0
+        self.time_bits=robustness_params['time_bits']
+        self.weight_bits =robustness_params['weight_bits'] 
+        self.noise=robustness_params['noise']
         self.alpha = tf.cast(tf.fill((filters, ), 1), dtype=tf.float64)
         super(SpikingConv2D, self).__init__(name=name)
     
@@ -99,7 +105,7 @@ class SpikingConv2D(tf.keras.layers.Layer):
         if self.padding=='valid' or self.BN!=1 or self.BN_before_ReLU==1: 
             # In this case the threshold is the same for whole input image.
             tj = tf.reshape(tj, (-1, tf.shape(W)[0]))
-            ti = call_spiking(tj, W, self.D_i[0], self.t_min_prev, self.t_min, self.t_max, noise=self.noise)
+            ti = call_spiking(tj, W, self.D_i[0], self.t_min, self.t_max, noise=self.noise)   
             # Layer output is reshaped back.
             if self.padding=='valid':
                 ti = tf.reshape(ti, (-1, image_valid_size, image_valid_size, self.filters))
@@ -112,7 +118,7 @@ class SpikingConv2D(tf.keras.layers.Layer):
             for i, tj_part in enumerate(tj_partitioned):
                 # Iterate over 9 different partitions and call call_spiking with different threshold value.
                 tj_part = tf.reshape(tj_part, (-1, tf.shape(W)[0]))
-                ti_part = call_spiking(tj_part, W, self.D_i[i], self.t_min_prev, self.t_min, self.t_max, noise=self.noise)
+                ti_part = call_spiking(tj_part, W, self.D_i[i], self.t_min, self.t_max, noise=self.noise)
                 # Partitions are reshaped back.
                 if i==0: ti_part=tf.reshape(ti_part, (-1, image_valid_size, image_valid_size, self.filters))
                 if i in [1, 3, 5, 7]: ti_part=tf.reshape(ti_part, (-1, 1, 1, self.filters))
@@ -264,55 +270,44 @@ def create_vgg_model_SNN(layers2D, kernel_size, layers1D, data, optimizer, X_n=1
     return model
 
 
-def create_fc_model_ReLU(layers = 2, optimizer='adam', N_hid=340, N_in=784, N_out=10):
+def create_fc_model_ReLU(layers = 2, optimizer='adam'):
     """
     Create a 2-layer fully-connected ReLU network to for MNIST dataset.
     """
-    N = lambda l: (N_hid[l-1] if type(N_hid)==list else N_hid)
-    inputs = Input(shape=(N_in))
-    x = Dense(N(1), activation=None, name='dense_1')(inputs)
+    inputs = Input(shape=(784))
+    x = Dense(340, activation=None, name='dense_1')(inputs)
     x = tf.keras.layers.Activation('relu')(x)
     for i in range(layers-2):
-        x = Dense(N(i+2), activation=None, name='dense_'+str(i+2))(x)
+        x = Dense(340, activation=None, name='dense_'+str(i+2))(x)
         x = tf.keras.layers.Activation('relu')(x)
-    outputs = Dense(N_out, activation=None, name='dense_output')(x)
+    outputs = Dense(10, activation=None, name='dense_output')(x)
     model = Model (inputs=inputs, outputs=outputs)
     model.compile(loss=tf.keras.losses.CategoricalCrossentropy(from_logits=True), optimizer=optimizer, metrics=["categorical_accuracy"])
     return model
 
 
-def create_fc_model_SNN(layers, optimizer, X_n=1000, robustness_params={}, N_hid=340, N_in=784, N_out=10):
+def create_fc_model_SNN(layers, optimizer, X_n=1000, robustness_params={}):
     """
     Create 2-layer fully connected network. Tested on MNIST dataset.
     """
-    N = lambda l: (N_hid[l-1] if type(N_hid)==list else N_hid)
     min_ti=[]
-    tj = Input(shape=N_in)
-    ti = SpikingDense(N(1), 'dense_1', (X_n[0] if type(X_n)==list else X_n), robustness_params=robustness_params)(tj)
+    tj = Input(shape=784)
+    ti = SpikingDense(340, 'dense_1', X_n, robustness_params=robustness_params)(tj)
     min_ti.append(tf.reduce_min(ti))
     for i in range(layers-2):
-        ti = SpikingDense(N(i+2), 'dense_' + str(i+2), (X_n[1+i] if type(X_n)==list else X_n), robustness_params=robustness_params)(ti)
+        ti = SpikingDense(340, 'dense_' + str(i+2), X_n, robustness_params=robustness_params)(ti)
         min_ti.append(tf.reduce_min(ti))
-    outputs = SpikingDense(N_out, 'dense_output', outputLayer=True, robustness_params=robustness_params)(ti)
+    outputs = SpikingDense(10, 'dense_output', outputLayer=True, robustness_params=robustness_params)(ti)
     model = ModelTmax (inputs=tj, outputs=[outputs, min_ti])
     model.compile(metrics=['accuracy'], loss=tf.keras.losses.CategoricalCrossentropy(from_logits=True), optimizer=optimizer)
     return model
 
 
-def call_spiking(tj, W, D_i, t_min_prev, t_min, t_max, robustness_params):
+def call_spiking(tj, W, D_i, t_min, t_max, noise):
     """
     Calculates spiking times from which ReLU functionality can be recovered.
     Assumes tau_c=1 and B_i^(n)=1
     """
-    if robustness_params['time_bits'] != 0:
-        tj = t_min_prev+tf.quantization.fake_quant_with_min_max_args(tf.cast(tj-t_min_prev, dtype=tf.float32),
-            min=t_min_prev, max=t_min, num_bits=robustness_params['time_bits'])
-        tj = tf.cast(tj, tf.float64)
-    if robustness_params['weight_bits'] != 0:
-        W = tf.quantization.fake_quant_with_min_max_args(tf.cast(W, dtype=tf.float32),
-            min=robustness_params['w_min'], max=robustness_params['w_max'], num_bits=robustness_params['weight_bits'])
-        W = tf.cast(W, tf.float64)
-
     # Calculate the spiking threshold (Eq. 18)
     threshold = t_max - t_min - D_i
     # Calculate output spiking time ti (Eq. 7)
@@ -321,6 +316,6 @@ def call_spiking(tj, W, D_i, t_min_prev, t_min, t_max, robustness_params):
     # No spike is modelled as t_max that cancels out in the next layer (tj-t_min) as t_min there is t_max
     ti = tf.where(ti < t_max, ti, t_max)
     # Add noise to the spiking time for noise simulations
-    ti = ti + tf.random.normal(tf.shape(ti), stddev=robustness_params['noise'], dtype=tf.dtypes.float64)
+    ti = ti + tf.random.normal(tf.shape(ti), stddev=noise, dtype=tf.dtypes.float64)
     return ti
 

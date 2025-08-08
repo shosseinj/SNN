@@ -1,0 +1,7 @@
+myvenv
+.pyc
+*.pyc
+*.pkl
+.pkl
+*.h5
+*.npz
