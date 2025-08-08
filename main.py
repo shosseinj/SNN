@@ -13,10 +13,48 @@ from tensorflow.keras.layers import ReLU, Lambda
 import numpy as np
 import pickle as pkl
 import logging
+from utils import *
+
+from tensorflow.keras.layers import Conv2D, Input, Dense, MaxPool2D, Flatten, Dropout, BatchNormalization
+from tensorflow.keras.models import Model
 
 start_time = time.time()
-tf.keras.backend.set_floatx('float64') #to avoid numerical differences when comparing training of ReLU vs SNN
+# tf.keras.backend.set_floatx('float64') #to avoid numerical differences when comparing training of ReLU vs SNN
 override = None
+
+# def create_original_model(input_shape=(32, 32, 3)):
+#     inputs = Input(shape=input_shape)
+
+#     x = Conv2D(64, (3, 3), padding='same')(inputs)
+#     x = BatchNormalization()(x)
+#     x = Activation('relu')(x)
+#     x = Dropout(0.2)(x)
+
+#     x = Conv2D(64, (3, 3), padding='same')(x)
+#     x = BatchNormalization()(x)
+#     x = Activation('relu')(x)
+#     x = Dropout(0.2)(x)
+#     x = MaxPool2D((2, 2))(x)
+
+#     x = Conv2D(128, (3, 3), padding='same')(x)
+#     x = BatchNormalization()(x)
+#     x = Activation('relu')(x)
+#     x = Dropout(0.2)(x)
+
+#     x = Conv2D(128, (3, 3), padding='same')(x)
+#     x = BatchNormalization()(x)
+#     x = Activation('relu')(x)
+#     x = Dropout(0.2)(x)
+#     x = MaxPool2D((2, 2))(x)
+
+#     x = Conv2D(256, (3, 3), padding='same')(x)
+#     x = BatchNormalization()(x)
+#     x = Activation('relu')(x)
+
+#     x = Flatten()(x)
+#     outputs = Dense(10, activation='softmax')(x)
+
+#     return Model(inputs, outputs)
 
 strtobool = (lambda s: s=='True')
 parser = argparse.ArgumentParser(description='TTFS')
@@ -30,7 +68,8 @@ parser.add_argument('--epochs', type=int, default=10, help='Epochs. 0 -skip trai
 parser.add_argument('--testing', type=strtobool, default=False, help='Execute testing.')
 parser.add_argument('--load', type=str, default='False', help='Load before training. (True|False|custom_name.h5)')
 parser.add_argument('--save', type=strtobool, default=False, help='Store after training.')
-# Robustness parameters:
+# Robustness parameters:fused_model
+parser.add_argument('--findMax', type=strtobool, default=False, help='Store after training.')
 parser.add_argument('--noise', type=float, default=0.0, help='Noise std.dev.')
 parser.add_argument('--time_bits', type=int, default=0, help='number of bits to represent time. 0 -disabled')
 parser.add_argument('--weight_bits', type=int, default=0, help='number of bits to represent weights. 0 -disabled')
@@ -91,7 +130,7 @@ if 'VGG' in args.model_name:
 if model is None:
     print('Please specify a valid model. Exiting.')
     exit(1)
-model.summary()
+# model.summary()
 model.last_dense = list(filter(lambda x : 'dense' in x.name, model.layers))[-1]
 
 if args.load != 'False':
@@ -141,32 +180,66 @@ if args.testing and args.epochs > 0:
 if args.save and 'ReLU' in args.model_type:
     logging.info("#### Saving ReLU model ####")
     # 1. Save original ReLU weights
-    model.save_weights(args.logging_dir + '/' + args.model_name + '.weights.h5')
+    # model.save_weights(args.logging_dir + '/' + args.model_name + '.weights.h5')
 
     # Fuse (imaginary) batch normalization layers.
     logging.info('fuse (imaginary) BN layers')
     # shift/scale input data accordingly
     data.x_test, data.x_train = (data.x_test - data.p)/(data.q-data.p), (data.x_train - data.p)/(data.q-data.p)
     BN = 'BN' in args.model_name
-    model1 = fuse_bn(data, model, BN=BN, p=data.p, q=data.q, optimizer=optimizer)
+    # model1 = fuse_bn(data, model, BN=BN, p=data.p, q=data.q, optimizer=optimizer)
+
+
+
+
+
+
+    # original_model = create_original_model()
+    model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+
+    fused_model = fuse_bn_functional(model)
+    fused_model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+
+    test_input = np.random.rand(1, 32, 32, 3).astype(np.float32)
+    original_output = model.predict(test_input)
+    fused_output = fused_model.predict(test_input)
+
+    print("Original model output:", original_output)
+    print("Fused model output:", fused_output)
+    print("Max difference:", np.abs(original_output - fused_output).max())
+
+
+
+
+
+
+
+
+
+
+
+
+
+   
     
     logging.info(model.summary())
+    logging.info(fused_model.summary())
     # Test with normalized input
-    sample = np.expand_dims(data.x_test[0], axis=0)  # Add batch dimension
+    # sample = np.expand_dims(data.x_test[0], axis=0)  # Add batch dimension
     # output_original = model.predict(sample)
     # output_fused = model1.predict(sample)
 
-    def get_layer_outputs(model, input):
-        outputs = {}
-        x = input
-        for name, layer in model.named_children():  # Works for Sequential
-            x = layer(x)
-            outputs[name] = x.detach()  # Store output
-        return outputs
+    # def get_layer_outputs(model, input):
+    #     outputs = {}
+    #     x = input
+    #     for name, layer in model.named_children():  # Works for Sequential
+    #         x = layer(x)
+    #         outputs[name] = x.detach()  # Store output
+    #     return outputs
 
-    # Get outputs for both models
-    outputs_orig = get_layer_outputs(model, sample)
-    outputs_fused = get_layer_outputs(model1, sample)
+    # # Get outputs for both models
+    # outputs_orig = get_layer_outputs(model, sample)
+    # outputs_fused = get_layer_outputs(model1, sample)
 
 
     # Check if outputs are close
@@ -174,27 +247,27 @@ if args.save and 'ReLU' in args.model_type:
     # 2. Save preprocessed ReLU model.
     model.save_weights(args.logging_dir + '/' + args.model_name + '_preprocessed.weights.h5')
     logging.info('saved preprocessed ReLU model')
+    if args.findMax:
+      # 3. Find maximum layer outputs.
+      logging.info('calculating maximum layer output...')
+      layer_num, X_n = 0, []
+      layers_max = []
+      for k, layer in enumerate(model.layers):
+          if 'conv' in layer.name or 'dense' in layer.name:
+              if k != len(model.layers) - 2:
+                  # Apply ReLU first
+                  relu_output = ReLU()(layer.output)
+                  
+                  # Wrap tf.reduce_max in a Lambda layer
+                  max_output = Lambda(lambda x: tf.reduce_max(x))(relu_output)
+                  
+                  layers_max.append(max_output)
 
-    # 3. Find maximum layer outputs.
-    logging.info('calculating maximum layer output...')
-    layer_num, X_n = 0, []
-    layers_max = []
-    for k, layer in enumerate(model.layers):
-        if 'conv' in layer.name or 'dense' in layer.name:
-            if k != len(model.layers) - 2:
-                # Apply ReLU first
-                relu_output = ReLU()(layer.output)
-                
-                # Wrap tf.reduce_max in a Lambda layer
-                max_output = Lambda(lambda x: tf.reduce_max(x))(relu_output)
-                
-                layers_max.append(max_output)
-
-    extractor = tf.keras.Model(inputs=model.inputs, outputs=layers_max)
-    output = extractor.predict(data.x_train, batch_size=64, verbose=1)
-    X_n = list(map(lambda x: np.max(x), output))
-    logging.info('X_n: %s', X_n)
-    pkl.dump(X_n, open(args.logging_dir + '/' + args.model_name + '_X_n.pkl', 'wb'))
-    logging.info('saved maximum layer output')
+      extractor = tf.keras.Model(inputs=model.inputs, outputs=layers_max)
+      output = extractor.predict(data.x_train, batch_size=64, verbose=1)
+      X_n = list(map(lambda x: np.max(x), output))
+      logging.info('X_n: %s', X_n)
+      pkl.dump(X_n, open(args.logging_dir + '/' + args.model_name + '_X_n.pkl', 'wb'))
+      logging.info('saved maximum layer output')
 
 print('### Total elapsed time [s]:', time.time() - start_time)

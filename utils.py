@@ -2,15 +2,48 @@ import tensorflow as tf
 from tensorflow.keras.layers import Input, Conv2D, BatchNormalization, Activation, MaxPool2D, Dropout, Flatten, Dense, InputLayer
 from tensorflow.keras.models import Model
 import numpy as np
+import logging
+import os
+import sys
+import numpy as np
+import tensorflow as tf
 
+def set_up_logging(logging_dir, model_name):
+    """
+    Set up logging for the simulation.
+    """
+    os.makedirs(logging_dir, exist_ok=True)
+    logging.basicConfig(
+        level=logging.DEBUG,
+        handlers=[
+           logging.FileHandler(logging_dir + f'/{model_name}_log.txt', mode='w'),
+           logging.StreamHandler(sys.stdout),
+        ],
+    )
+    mpl_logger = logging.getLogger("matplotlib")
+    mpl_logger.setLevel(logging.WARNING)
+
+
+def get_optimizer(lr):
+    """
+    Get optimizer for the training on MNIST/Fashion-MNIST dataset.
+    """
+    learning_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
+        initial_learning_rate=lr,
+        decay_steps=5000,  
+        decay_rate=0.9, 
+    )
+    optimizer = tf.keras.optimizers.Adam(learning_rate=learning_schedule) 
+    return optimizer
 
 class Conv2DWithBias(tf.keras.layers.Layer):
-    def __init__(self, filters, kernel_size, strides=(1, 1), padding='valid', **kwargs):
+    def __init__(self, filters, kernel_size, strides=(1, 1),activation=None, padding='valid', **kwargs):
         super().__init__(**kwargs)
         self.filters = filters
         self.kernel_size = kernel_size
         self.strides = strides
         self.padding = padding
+        self.activation = tf.keras.activations.get(activation)
         self.use_custom_bias = False
 
     def build(self, input_shape):
@@ -80,6 +113,8 @@ class Conv2DWithBias(tf.keras.layers.Layer):
                     output = tf.tensor_scatter_nd_update(output, indices, updates)
 
             x = output + self.std_bias
+        if self.activation is not None:
+            x = self.activation(x)
         return x
     def set_bias(self, bias, W=None, b_term=None):
         self.use_custom_bias = True
@@ -118,7 +153,9 @@ class Conv2DWithBias(tf.keras.layers.Layer):
                 adjusted_bias = bias - delta_bias
                 adjusted_bias = tf.reshape(adjusted_bias, (self.filters,))
 
-                self.bias[i].assign(adjusted_bias)
+                # self.bias[i].assign(adjusted_bias)
+                self.bias[i].assign(tf.cast(adjusted_bias, self.bias[i].dtype))
+
         else:
             for i in range(9):
                 self.bias[i].assign(bias)
@@ -220,6 +257,7 @@ def fuse_bn_functional(original_model):
                     kernel_size=layer.kernel_size,
                     strides=layer.strides,
                     padding=layer.padding,
+                    activation=layer.activation,
                     name=layer.name + '_fused'
                 )
                 fused_conv.build(x.shape)
@@ -244,6 +282,7 @@ def fuse_bn_functional(original_model):
                     kernel_size=layer.kernel_size,
                     strides=layer.strides,
                     padding=layer.padding,
+                     activation=layer.activation,
                     name=layer.name + '_fused'
                 )
                 conv.build(x.shape)
@@ -290,19 +329,3 @@ def fuse_bn_functional(original_model):
             i += 1
 
     return Model(inputs, x)
-
-
-if __name__ == "__main__":
-    original_model = create_original_model()
-    original_model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-
-    fused_model = fuse_bn_functional(original_model)
-    fused_model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-
-    test_input = np.random.rand(1, 32, 32, 3).astype(np.float32)
-    original_output = original_model.predict(test_input)
-    fused_output = fused_model.predict(test_input)
-
-    print("Original model output:", original_output)
-    print("Fused model output:", fused_output)
-    print("Max difference:", np.abs(original_output - fused_output).max())
