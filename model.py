@@ -173,56 +173,115 @@ class ModelTmax(tf.keras.Model):
         self.compiled_metrics.update_state(y_all, y_pred_all[0])
         return {m.name: m.result() for m in self.metrics}
 
-
-def create_vgg_model_ReLU(layers2D, kernel_size, layers1D, data, BN, dropout=0, optimizer='adam',
-                          kernel_regularizer=None, kernel_initializer='glorot_uniform'):
-    """
-    Create a VGG-like ReLU network for various dataset.
-    """
+def create_vgg_model_ReLU(layers2D, kernel_size, layers1D, data, BN, dropout=0.3 ,optimizer='adam',
+                         kernel_regularizer=None, kernel_initializer='glorot_uniform'):
     inputs = Input(shape=data.input_shape)
     i_conv = 0
     i_bn = 0
     i_dense = 0
+    
     for k, f in enumerate(layers2D):
-        if f!='pool':
+        if f != 'pool':
             i_conv += 1
-            if k==0:
-                x=Conv2D(f,  kernel_size, padding='same', activation=None,
-                         kernel_regularizer=kernel_regularizer,
-                         kernel_initializer=kernel_initializer,
-                         name='conv2d_'+str(i_conv))(inputs)
+            if k == 0:
+                x = Conv2D(f, kernel_size, padding='same', activation=None,
+                          kernel_regularizer=kernel_regularizer,
+                          kernel_initializer=kernel_initializer,
+                          name='conv2d_'+str(i_conv))(inputs)
             else:
-                x=Conv2D(f,  kernel_size, padding='same', activation=None,
-                         kernel_regularizer=kernel_regularizer,
-                         kernel_initializer=kernel_initializer,
-                         name='conv2d_'+str(i_conv))(x)
-            x = tf.keras.layers.Activation('relu')(x)
+                x = Conv2D(f, kernel_size, padding='same', activation=None,
+                          kernel_regularizer=kernel_regularizer,
+                          kernel_initializer=kernel_initializer,
+                          name='conv2d_'+str(i_conv))(x)
+            
+            # Changed order: BN before Activation
             if BN:
                 i_bn += 1
-                x=BatchNormalization(name='batch_normalization_'+str(i_bn))(x)
+                x = BatchNormalization(name='batch_normalization_'+str(i_bn))(x)
+            
+            x = tf.keras.layers.Activation('relu')(x)
             x = Dropout(dropout)(x)
         else:
-            x=MaxPool2D()(x)
-    x=Flatten()(x)
+            x = MaxPool2D()(x)
+    
+    x = Flatten()(x)
+    
     for j, d in enumerate(layers1D):
-        i_dense +=1
-        x=Dense(d, activation=None,
-                kernel_regularizer=kernel_regularizer,
-                kernel_initializer=kernel_initializer,
-                name='dense_'+str(i_dense))(x)
-        x = tf.keras.layers.Activation('relu')(x)
+        i_dense += 1
+        x = Dense(d, activation=None,
+                 kernel_regularizer=kernel_regularizer,
+                 kernel_initializer=kernel_initializer,
+                 name='dense_'+str(i_dense))(x)
+        
+        # Changed order for dense layers too
         if BN:
             i_bn += 1
-            x=BatchNormalization(name='batch_normalization_'+str(i_bn))(x)
+            x = BatchNormalization(name='batch_normalization_'+str(i_bn))(x)
+        
+        x = tf.keras.layers.Activation('relu')(x)
         x = Dropout(dropout)(x)
-    i_dense +=1
-    outputs=Dense(data.num_of_classes, activation=None,
-                  kernel_regularizer=kernel_regularizer,
-                  #kernel_initializer=kernel_initializer, #logits - should be standard glorot
-                  name='dense_' +str(i_dense))(x)
-    model = Model (inputs=inputs, outputs=outputs)
-    model.compile(metrics=['accuracy'], loss=tf.keras.losses.CategoricalCrossentropy(from_logits=True), optimizer=optimizer)
+    
+    i_dense += 1
+    x = Dense(data.num_of_classes, activation='softmax',
+                   kernel_regularizer=kernel_regularizer,
+                   name='dense_' + str(i_dense))(x)
+    outputs = x
+    model = Model(inputs=inputs, outputs=outputs)
+    model.compile(metrics=['accuracy'], 
+                 loss=tf.keras.losses.CategoricalCrossentropy(from_logits=False),  # Changed to False
+                 optimizer=optimizer)
     return model
+
+
+# def create_vgg_model_ReLU(layers2D, kernel_size, layers1D, data, BN, dropout=0, optimizer='adam',
+#                           kernel_regularizer=None, kernel_initializer='glorot_uniform'):
+#     """
+#     Create a VGG-like ReLU network for various dataset.
+#     """
+#     inputs = Input(shape=data.input_shape)
+#     i_conv = 0
+#     i_bn = 0
+#     i_dense = 0
+#     for k, f in enumerate(layers2D):
+#         if f!='pool':
+#             i_conv += 1
+#             if k==0:
+#                 x=Conv2D(f,  kernel_size, padding='same', activation=None,
+#                          kernel_regularizer=kernel_regularizer,
+#                          kernel_initializer=kernel_initializer,
+#                          name='conv2d_'+str(i_conv))(inputs)
+#             else:
+#                 x=Conv2D(f,  kernel_size, padding='same', activation=None,
+#                          kernel_regularizer=kernel_regularizer,
+#                          kernel_initializer=kernel_initializer,
+#                          name='conv2d_'+str(i_conv))(x)
+#             x = tf.keras.layers.Activation('relu')(x)
+#             if BN:
+#                 i_bn += 1
+#                 x=BatchNormalization(name='batch_normalization_'+str(i_bn))(x)
+#             x = Dropout(dropout)(x)
+#         else:
+#             x=MaxPool2D()(x)
+#     x=Flatten()(x)
+#     for j, d in enumerate(layers1D):
+#         i_dense +=1
+#         x=Dense(d, activation=None,
+#                 kernel_regularizer=kernel_regularizer,
+#                 kernel_initializer=kernel_initializer,
+#                 name='dense_'+str(i_dense))(x)
+#         x = tf.keras.layers.Activation('relu')(x)
+#         if BN:
+#             i_bn += 1
+#             x=BatchNormalization(name='batch_normalization_'+str(i_bn))(x)
+#         x = Dropout(dropout)(x)
+#     i_dense +=1
+#     outputs=Dense(data.num_of_classes, activation='softmax',
+#                   kernel_regularizer=kernel_regularizer,
+#                   #kernel_initializer=kernel_initializer, #logits - should be standard glorot
+#                   name='dense_' +str(i_dense))(x)
+#     model = Model (inputs=inputs, outputs=outputs)
+#     model.compile(metrics=['accuracy'], loss=tf.keras.losses.CategoricalCrossentropy(from_logits=True), optimizer=optimizer)
+#     return model
 
 
 def create_vgg_model_SNN(layers2D, kernel_size, layers1D, data, optimizer, X_n=1000,

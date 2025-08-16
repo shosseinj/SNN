@@ -1,308 +1,201 @@
 import tensorflow as tf
-from tensorflow.keras.layers import Input, Conv2D, BatchNormalization, Activation, MaxPool2D, Dropout, Flatten, Dense, InputLayer
+from tensorflow.keras.layers import Input, Conv2D, BatchNormalization, Activation, MaxPool2D, Flatten, Dense, InputLayer
 from tensorflow.keras.models import Model
 import numpy as np
+import logging
+import os
+import sys
+import tensorflow as tf
+from tensorflow.keras.layers import Input, Conv2D, BatchNormalization, Activation, MaxPool2D, Flatten, Dense, Dropout
+from tensorflow.keras.models import Model
+import numpy as np
+import logging
 
 
-class Conv2DWithBias(tf.keras.layers.Layer):
-    def __init__(self, filters, kernel_size, strides=(1, 1), padding='valid', **kwargs):
+def set_up_logging(logging_dir, model_name):
+    """
+    Set up logging for the simulation.
+    """
+    os.makedirs(logging_dir, exist_ok=True)
+    logging.basicConfig(
+        level=logging.DEBUG,
+        handlers=[
+           logging.FileHandler(logging_dir + f'/{model_name}_log.txt', mode='w'),
+           logging.StreamHandler(sys.stdout),
+        ],
+    )
+    mpl_logger = logging.getLogger("matplotlib")
+    mpl_logger.setLevel(logging.WARNING)
+
+
+def get_optimizer(lr):
+    """
+    Get optimizer for the training on MNIST/Fashion-MNIST dataset.
+    """
+    learning_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
+        initial_learning_rate=lr,
+        decay_steps=5000,  
+        decay_rate=0.9, 
+    )
+    optimizer = tf.keras.optimizers.Adam(learning_rate=learning_schedule) 
+    return optimizer
+
+class FusedConv2D(tf.keras.layers.Layer):
+    """Conv2D layer with properly fused Batch Normalization"""
+    def __init__(self, filters, kernel_size, strides=(1,1), padding='same', activation=None, **kwargs):
         super().__init__(**kwargs)
         self.filters = filters
         self.kernel_size = kernel_size
         self.strides = strides
         self.padding = padding
-        self.use_custom_bias = False
-
+        self.activation = tf.keras.activations.get(activation)
+        
     def build(self, input_shape):
         kernel_shape = self.kernel_size + (input_shape[-1], self.filters)
         self.kernel = self.add_weight(
-            name="kernel",
+            name='kernel',
             shape=kernel_shape,
-            initializer="glorot_uniform",
+            initializer='glorot_uniform',
             trainable=True
         )
         self.bias = self.add_weight(
-            name="bias",
-            shape=(9, self.filters),
-            initializer="zeros",
-            trainable=True
-        )
-        self.std_bias = self.add_weight(
-            name="std_bias",
+            name='bias',
             shape=(self.filters,),
-            initializer="zeros",
+            initializer='zeros',
             trainable=True
         )
-        self.BN = self.add_weight(
-            name="BN",
-            shape=(1,),
-            initializer="zeros",
-            trainable=False
-        )
-        self.BN_before_ReLU = self.add_weight(
-            name="BN_before_ReLU",
-            shape=(1,),
-            initializer="zeros",
-            trainable=False
-        )
         super().build(input_shape)
-
+        
     def call(self, inputs):
-        x = tf.nn.conv2d(inputs, self.kernel, strides=self.strides, padding=self.padding.upper())
-        if self.use_custom_bias:
-            batch_size = tf.shape(x)[0]
-            h, w = tf.shape(x)[1], tf.shape(x)[2]
-            h_step = h // 3
-            w_step = w // 3
-
-            output = tf.identity(x)  # safe copy
-
-            for i in range(3):
-                for j in range(3):
-                    region_idx = i * 3 + j
-                    region_bias = self.bias[region_idx]  # shape (filters,)
-
-                    h_start, h_end = i * h_step, (i + 1) * h_step
-                    w_start, w_end = j * w_step, (j + 1) * w_step
-
-                    output_slice = output[:, h_start:h_end, w_start:w_end, :]
-                    output_slice += region_bias  # broadcasting
-
-                    mesh = tf.meshgrid(
-                        tf.range(batch_size),
-                        tf.range(h_start, h_end),
-                        tf.range(w_start, w_end),
-                        indexing='ij'
-                    )
-                    indices = tf.reshape(tf.stack(mesh, axis=-1), [-1, 3])
-                    updates = tf.reshape(output_slice, [-1, self.filters])
-
-                    output = tf.tensor_scatter_nd_update(output, indices, updates)
-
-            x = output + self.std_bias
-        return x
-    def set_bias(self, bias, W=None, b_term=None):
-        self.use_custom_bias = True
-
-        bias = tf.convert_to_tensor(bias, dtype=tf.float32)
-        bias = tf.reshape(bias, (-1,))  # shape (filters,)
-
-        if W is not None:
-            W = tf.convert_to_tensor(W, dtype=tf.float32)
-            if b_term is None:
-                b_term = tf.zeros((W.shape[3],), dtype=tf.float32)  # note axis 3 = filters
-            else:
-                b_term = tf.convert_to_tensor(b_term[:W.shape[3]], dtype=tf.float32)
-
-            b_term = tf.reshape(b_term, (-1,))  # shape (filters,)
-
-            for i in range(9):
-                if i == 0:
-                    delta_sum_W = tf.zeros((W.shape[3],), dtype=tf.float32)
-                elif i == 1:
-                    delta_sum_W = tf.reduce_sum(W, axis=(0, 1, 2))  # sum height, width, input channels
-                else:
-                    delta_sum_W = tf.zeros((W.shape[3],), dtype=tf.float32)
-
-                delta_sum_W = tf.reshape(delta_sum_W, (-1,))  # shape (filters,)
-                delta_bias = b_term * delta_sum_W
-
-                # Debug print to verify shapes
-                tf.print(f"set_bias i={i} shapes:", 
-                        "bias:", tf.shape(bias), bias,
-                        "delta_bias:", tf.shape(delta_bias), delta_bias)
-
-                if bias.shape != delta_bias.shape:
-                    raise ValueError(f"Shape mismatch: bias {bias.shape} vs delta_bias {delta_bias.shape}")
-
-                adjusted_bias = bias - delta_bias
-                adjusted_bias = tf.reshape(adjusted_bias, (self.filters,))
-
-                self.bias[i].assign(adjusted_bias)
-        else:
-            for i in range(9):
-                self.bias[i].assign(bias)
-
-
-class MaxMinPool2D(tf.keras.layers.Layer):
-    def __init__(self, pool_size=(2, 2), strides=None, padding='valid', **kwargs):
-        super().__init__(**kwargs)
-        self.pool_size = pool_size
-        self.strides = strides or pool_size
-        self.padding = padding
-        self.sign = None
-
-    def build(self, input_shape):
-        self.sign = self.add_weight(
-            name='sign',
-            shape=(1, 1, 1, input_shape[-1]),
-            initializer='ones',
-            trainable=False,
-            dtype=tf.float32
-        )
-        super().build(input_shape)
-
-    def call(self, inputs):
-        pooled = tf.nn.max_pool2d(
-            inputs * self.sign,
-            ksize=[1, *self.pool_size, 1],
+        x = tf.nn.conv2d(
+            inputs, 
+            self.kernel, 
             strides=[1, *self.strides, 1],
             padding=self.padding.upper()
         )
-        return pooled * self.sign
+        x = tf.nn.bias_add(x, self.bias)
+        if self.activation is not None:
+            x = self.activation(x)
+        return x
+
+def fuse_bn_functional(model):
+    """Fuse Conv2D + BatchNorm layers in a Keras Functional model"""
+
+    def fuse_conv_bn(conv_layer, bn_layer):
+        """Compute fused Conv2D weights and bias"""
+        W = conv_layer.get_weights()[0]   # (kh, kw, in_ch, out_ch)
+        b = conv_layer.get_weights()[1] if len(conv_layer.get_weights()) > 1 else np.zeros(conv_layer.filters)
+
+        gamma = bn_layer.gamma.numpy()
+        beta = bn_layer.beta.numpy()
+        mean = bn_layer.moving_mean.numpy()
+        var = bn_layer.moving_variance.numpy()
+        epsilon = bn_layer.epsilon
+
+        scale = gamma / np.sqrt(var + epsilon)   # shape (out_ch,)
+        W_fused = W * scale.reshape((1, 1, 1, -1))  # broadcast on out_ch
+        b_fused = (b - mean) * scale + beta
+        return W_fused, b_fused
 
 
-def create_original_model(input_shape=(32, 32, 3)):
-    inputs = Input(shape=input_shape)
+    layer_outputs = {}
+    inputs = Input(shape=model.input_shape[1:])
+    layer_outputs[model.layers[0].name] = inputs
+    layer_inputs = {} 
+    for layer in model.layers[1:]:
+        inbound_tensors = []
+        inbound_names = []
 
-    x = Conv2D(64, (3, 3), padding='same')(inputs)
-    x = BatchNormalization()(x)
-    x = Activation('relu')(x)
-    x = Dropout(0.2)(x)
+        # Collect inputs for this layer
+        for node in layer._inbound_nodes:
+            for inbound_tensor in node.input_tensors:
+                inbound_layer, _, _ = inbound_tensor._keras_history
+                inbound_layer_name = inbound_layer.name
+                if inbound_layer_name in layer_outputs:
+                    inbound_tensors.append(layer_outputs[inbound_layer_name])
+                    inbound_names.append(inbound_layer_name)
 
-    x = Conv2D(64, (3, 3), padding='same')(x)
-    x = BatchNormalization()(x)
-    x = Activation('relu')(x)
-    x = Dropout(0.2)(x)
-    x = MaxPool2D((2, 2))(x)
+        if not inbound_tensors:
+            raise ValueError(f"No inbound tensors found for layer {layer.name}")
 
-    x = Conv2D(128, (3, 3), padding='same')(x)
-    x = BatchNormalization()(x)
-    x = Activation('relu')(x)
-    x = Dropout(0.2)(x)
+        x_in = inbound_tensors[0] if len(inbound_tensors) == 1 else inbound_tensors
 
-    x = Conv2D(128, (3, 3), padding='same')(x)
-    x = BatchNormalization()(x)
-    x = Activation('relu')(x)
-    x = Dropout(0.2)(x)
-    x = MaxPool2D((2, 2))(x)
+        # Save the input tensor for potential fusion later
+        layer_inputs[layer.name] = x_in
 
-    x = Conv2D(256, (3, 3), padding='same')(x)
-    x = BatchNormalization()(x)
-    x = Activation('relu')(x)
+        # ---- FUSE Conv2D + BN ----
+        if isinstance(layer, tf.keras.layers.BatchNormalization) and len(inbound_names) == 1:
+            prev_layer = model.get_layer(inbound_names[0])
+            if isinstance(prev_layer, tf.keras.layers.Conv2D):
+                # Clone Conv2D config but drop activation
+                conv_config = prev_layer.get_config()
+                act_name = conv_config.get("activation", None)
+                conv_config["activation"] = None
 
-    x = Flatten()(x)
-    outputs = Dense(10, activation='softmax')(x)
+                fused_conv = tf.keras.layers.Conv2D(
+                        filters=prev_layer.filters,
+                        kernel_size=prev_layer.kernel_size,
+                        strides=prev_layer.strides,
+                        padding=prev_layer.padding,
+                        dilation_rate=prev_layer.dilation_rate,
+                        use_bias=True,
+                        kernel_initializer='zeros',
+                        bias_initializer='zeros',
+                        name=prev_layer.name + "_fused"
+                    )
+                x_fused = fused_conv( layer_inputs[prev_layer.name])
+                    
 
+                # Fuse weights
+                W_fused, b_fused = fuse_conv_bn(prev_layer, layer)
+                fused_conv.set_weights([W_fused, b_fused])
+
+                # Re-apply activation if needed
+                if act_name and act_name != "linear":
+                    x_fused = Activation(act_name)(x_fused)
+
+                layer_outputs[layer.name] = x_fused
+                continue  # skip adding BN separately
+
+        # ---- Default: clone layer ----
+        new_layer = layer.__class__.from_config(layer.get_config())
+        x_out = new_layer(x_in)
+        if layer.get_weights():
+            new_layer.set_weights(layer.get_weights())
+        layer_outputs[layer.name] = x_out
+
+    outputs = layer_outputs[model.layers[-1].name]
     return Model(inputs, outputs)
 
 
-def fuse_bn_functional(original_model):
-    inputs = Input(shape=original_model.input_shape[1:])
-    x = inputs
-    i = 0
-    while i < len(original_model.layers):
-        layer = original_model.layers[i]
-
-        if isinstance(layer, InputLayer):
-            i += 1
-            continue
-
-        if isinstance(layer, Conv2D):
-            W_and_b = layer.get_weights()
-            W = W_and_b[0]
-            b = W_and_b[1] if len(W_and_b) > 1 else np.zeros((layer.filters,), dtype=np.float32)
-
-            if (i + 1) < len(original_model.layers) and isinstance(original_model.layers[i + 1], BatchNormalization):
-                bn_layer = original_model.layers[i + 1]
-                gamma = bn_layer.gamma.numpy()
-                beta = bn_layer.beta.numpy()
-                moving_mean = bn_layer.moving_mean.numpy()
-                moving_var = bn_layer.moving_variance.numpy()
-                epsilon = bn_layer.epsilon
-
-                kappa = gamma / np.sqrt(moving_var + epsilon)
-                b_fused = beta - moving_mean * kappa
-                W_fused = W * kappa
-
-                fused_conv = Conv2DWithBias(
-                    filters=layer.filters,
-                    kernel_size=layer.kernel_size,
-                    strides=layer.strides,
-                    padding=layer.padding,
-                    name=layer.name + '_fused'
-                )
-                fused_conv.build(x.shape)
-
-                # Weights order:
-                # kernel, bias(9, filters), std_bias(filters), BN(1,), BN_before_ReLU(1,)
-                weights = [
-                    W_fused,
-                    np.zeros((9, layer.filters), dtype=np.float32),  # bias placeholder
-                    np.zeros((layer.filters,), dtype=np.float32),   # std_bias placeholder
-                    np.zeros((1,), dtype=np.float32),                # BN
-                    np.zeros((1,), dtype=np.float32)                 # BN_before_ReLU
-                ]
-                fused_conv.set_weights(weights)
-                fused_conv.set_bias(b_fused, W=W_fused)
-
-                x = fused_conv(x)
-                i += 2
-            else:
-                conv = Conv2DWithBias(
-                    filters=layer.filters,
-                    kernel_size=layer.kernel_size,
-                    strides=layer.strides,
-                    padding=layer.padding,
-                    name=layer.name + '_fused'
-                )
-                conv.build(x.shape)
-
-                weights = [
-                    W,
-                    np.zeros((9, layer.filters), dtype=np.float32),  # bias placeholder
-                    b,                                               # std_bias placeholder (using bias here)
-                    np.zeros((1,), dtype=np.float32),                # BN
-                    np.zeros((1,), dtype=np.float32)                 # BN_before_ReLU
-                ]
-                conv.set_weights(weights)
-
-                x = conv(x)
-                i += 1
-
-        elif isinstance(layer, MaxPool2D):
-            pool = MaxMinPool2D(
-                pool_size=layer.pool_size,
-                strides=layer.strides,
-                padding=layer.padding,
-                name=layer.name + '_fused'
-            )
-            pool.build(x.shape)
-            x = pool(x)
-            i += 1
-
-        elif isinstance(layer, Activation):
-            x = Activation(layer.activation)(x)
-            i += 1
-
-        elif isinstance(layer, Flatten):
-            x = Flatten()(x)
-            i += 1
-
-        elif isinstance(layer, Dense):
-            x = Dense(layer.units, activation=layer.activation)(x)
-            i += 1
-
-        elif isinstance(layer, Dropout):
-            i += 1
-
-        else:
-            i += 1
-
-    return Model(inputs, x)
-
-
-if __name__ == "__main__":
-    original_model = create_original_model()
-    original_model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-
-    fused_model = fuse_bn_functional(original_model)
-    fused_model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-
-    test_input = np.random.rand(1, 32, 32, 3).astype(np.float32)
+def verify_model_fusion(original_model, fused_model, test_input=None):
+    """Thorough verification of model fusion"""
+    if test_input is None:
+        test_input = np.random.randn(1, *original_model.input_shape[1:]).astype(np.float32)
+    
+    # Compare outputs
     original_output = original_model.predict(test_input)
     fused_output = fused_model.predict(test_input)
-
-    print("Original model output:", original_output)
-    print("Fused model output:", fused_output)
-    print("Max difference:", np.abs(original_output - fused_output).max())
+    max_diff = np.abs(original_output - fused_output).max()
+    
+    # Compare layer-by-layer outputs where possible
+    layer_diffs = {}
+    for orig_layer in original_model.layers:
+        if orig_layer.name + '_fused' in [l.name for l in fused_model.layers]:
+            try:
+                orig_layer_model = Model(inputs=original_model.input, 
+                                        outputs=orig_layer.output)
+                fused_layer_model = Model(inputs=fused_model.input, 
+                                         outputs=fused_model.get_layer(orig_layer.name + '_fused').output)
+                
+                orig_out = orig_layer_model.predict(test_input)
+                fused_out = fused_layer_model.predict(test_input)
+                
+                if orig_out.shape == fused_out.shape:
+                    layer_diffs[orig_layer.name] = np.abs(orig_out - fused_out).max()
+                else:
+                    logging.warning(f"Skipping {orig_layer.name} due to shape mismatch: {orig_out.shape} vs {fused_out.shape}")
+            except Exception as e:
+                logging.warning(f"Couldn't compare {orig_layer.name}: {str(e)}")
+    
+    return max_diff, layer_diffs
