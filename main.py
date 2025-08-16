@@ -38,6 +38,7 @@ class SaveWeightsEveryNEpochs(Callback):
 
 start_time = time.time()
 # tf.keras.backend.set_floatx('float64') #to avoid numerical differences when comparing training of ReLU vs SNN
+# tf.keras.backend.set_floatx('float64') #to avoid numerical differences when comparing training of ReLU vs SNN
 override = None
 
 
@@ -53,6 +54,8 @@ parser.add_argument('--epochs', type=int, default=100, help='Epochs. 0 -skip tra
 parser.add_argument('--testing', type=strtobool, default=False, help='Execute testing.')
 parser.add_argument('--load', type=str, default='False', help='Load before training. (True|False|custom_name.h5)')
 parser.add_argument('--save', type=strtobool, default=False, help='Store after training.')
+# Robustness parameters:fused_model
+parser.add_argument('--findMax', type=strtobool, default=False, help='Store after training.')
 # Robustness parameters:fused_model
 parser.add_argument('--findMax', type=strtobool, default=False, help='Store after training.')
 parser.add_argument('--noise', type=float, default=0.0, help='Noise std.dev.')
@@ -115,6 +118,7 @@ if 'VGG' in args.model_name:
 if model is None:
     print('Please specify a valid model. Exiting.')
     exit(1)
+# model.summary()
 # model.summary()
 model.last_dense = list(filter(lambda x : 'dense' in x.name, model.layers))[-1]
 
@@ -313,6 +317,7 @@ if args.save and 'ReLU' in args.model_type:
 
     # Test with normalized input
     # sample = np.expand_dims(data.x_test[0], axis=0)  # Add batch dimension
+    # sample = np.expand_dims(data.x_test[0], axis=0)  # Add batch dimension
     # output_original = model.predict(sample)
     # output_fused = model1.predict(sample)
 
@@ -323,7 +328,17 @@ if args.save and 'ReLU' in args.model_type:
     #         x = layer(x)
     #         outputs[name] = x.detach()  # Store output
     #     return outputs
+    # def get_layer_outputs(model, input):
+    #     outputs = {}
+    #     x = input
+    #     for name, layer in model.named_children():  # Works for Sequential
+    #         x = layer(x)
+    #         outputs[name] = x.detach()  # Store output
+    #     return outputs
 
+    # # Get outputs for both models
+    # outputs_orig = get_layer_outputs(model, sample)
+    # outputs_fused = get_layer_outputs(model1, sample)
     # # Get outputs for both models
     # outputs_orig = get_layer_outputs(model, sample)
     # outputs_fused = get_layer_outputs(model1, sample)
@@ -349,7 +364,28 @@ if args.save and 'ReLU' in args.model_type:
                   max_output = Lambda(lambda x: tf.reduce_max(x))(relu_output)
                   
                   layers_max.append(max_output)
+    if args.findMax:
+      # 3. Find maximum layer outputs.
+      logging.info('calculating maximum layer output...')
+      layer_num, X_n = 0, []
+      layers_max = []
+      for k, layer in enumerate(model.layers):
+          if 'conv' in layer.name or 'dense' in layer.name:
+              if k != len(model.layers) - 2:
+                  # Apply ReLU first
+                  relu_output = ReLU()(layer.output)
+                  
+                  # Wrap tf.reduce_max in a Lambda layer
+                  max_output = Lambda(lambda x: tf.reduce_max(x))(relu_output)
+                  
+                  layers_max.append(max_output)
 
+      extractor = tf.keras.Model(inputs=model.inputs, outputs=layers_max)
+      output = extractor.predict(data.x_train, batch_size=64, verbose=1)
+      X_n = list(map(lambda x: np.max(x), output))
+      logging.info('X_n: %s', X_n)
+      pkl.dump(X_n, open(args.logging_dir + '/' + args.model_name + '_X_n.pkl', 'wb'))
+      logging.info('saved maximum layer output')
       extractor = tf.keras.Model(inputs=model.inputs, outputs=layers_max)
       output = extractor.predict(data.x_train, batch_size=64, verbose=1)
       X_n = list(map(lambda x: np.max(x), output))
