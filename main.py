@@ -57,7 +57,7 @@ parser.add_argument('--save', type=strtobool, default=False, help='Store after t
 # Robustness parameters:fused_model
 parser.add_argument('--findMax', type=strtobool, default=False, help='Store after training.')
 # Robustness parameters:fused_model
-parser.add_argument('--findMax', type=strtobool, default=False, help='Store after training.')
+
 parser.add_argument('--noise', type=float, default=0.0, help='Noise std.dev.')
 parser.add_argument('--time_bits', type=int, default=0, help='number of bits to represent time. 0 -disabled')
 parser.add_argument('--weight_bits', type=int, default=0, help='number of bits to represent weights. 0 -disabled')
@@ -380,12 +380,6 @@ if args.save and 'ReLU' in args.model_type:
                   
                   layers_max.append(max_output)
 
-      extractor = tf.keras.Model(inputs=model.inputs, outputs=layers_max)
-      output = extractor.predict(data.x_train, batch_size=64, verbose=1)
-      X_n = list(map(lambda x: np.max(x), output))
-      logging.info('X_n: %s', X_n)
-      pkl.dump(X_n, open(args.logging_dir + '/' + args.model_name + '_X_n.pkl', 'wb'))
-      logging.info('saved maximum layer output')
       extractor = tf.keras.Model(inputs=model.inputs, outputs=layers_max)
       output = extractor.predict(data.x_train, batch_size=64, verbose=1)
       X_n = list(map(lambda x: np.max(x), output))
