@@ -188,9 +188,7 @@ if args.save and 'ReLU' in args.model_type:
     BN = 'BN' in args.model_name
   
     
-    # test_input = np.random.rand(1, 32, 32, 3).astype(np.float32)
-    # original_output = model.predict(test_input,training=False)
-    # fused_output = fused_model.predict(test_input,training=False)
+ 
     test_input = (data.x_test[0:1] - data.p) / (data.q - data.p)
     original_output = model(test_input, training=False).numpy()
     fused_output    = fused_model(test_input, training=False).numpy()
@@ -200,9 +198,7 @@ if args.save and 'ReLU' in args.model_type:
     print("Original model output:", original_output)
     print("Fused model output:", fused_output)
     print("Max difference:", np.abs(original_output - fused_output).max())
-    from utils import fuse_bn_functional, verify_model_fusion
-    is_correct = verify_model_fusion(model, fused_model)
-    logging.info(f"Model fusion verified: {is_correct}")
+
 
     # import matplotlib.pyplot as plt
     # import numpy as np
@@ -259,50 +255,6 @@ if args.save and 'ReLU' in args.model_type:
 
 
 
-    import numpy as np
-    import matplotlib.pyplot as plt
-    import tensorflow as tf
-    import os
-
-    os.makedirs("layer_diffs", exist_ok=True)
-
-    idx = 0
-    test_input = np.expand_dims(data.x_test[idx], axis=0)
-
-    # Submodels for all layer outputs
-    orig_submodel = tf.keras.Model(inputs=model.input,
-                                  outputs=[l.output for l in model.layers])
-    fused_submodel = tf.keras.Model(inputs=fused_model.input,
-                                    outputs=[l.output for l in fused_model.layers])
-
-    orig_outputs = orig_submodel(test_input, training=False)
-    fused_outputs = fused_submodel(test_input, training=False)
-
-    diffs = []
-    layer_names = []
-    for o, f, l1, l2 in zip(orig_outputs, fused_outputs, model.layers, fused_model.layers):
-        if o.shape == f.shape:  # compare only if shapes match
-            diff = np.mean(np.abs(o.numpy() - f.numpy()))
-            diffs.append(diff)
-            layer_names.append(l1.name)
-        else:
-            print(f"Skipping {l1.name} vs {l2.name} due to shape mismatch: {o.shape} vs {f.shape}")
-
-    # Plot
-    plt.figure(figsize=(12, 4))
-    plt.plot(range(len(diffs)), diffs, marker='o')
-    plt.xticks(range(len(layer_names)), layer_names, rotation=90)
-    plt.xlabel("Layer name")
-    plt.ylabel("Mean absolute difference")
-    plt.title("Layer-by-Layer Difference (Original vs Fused)")
-    plt.tight_layout()
-    plt.savefig("layer_diffs/layer_diff_plot.png")
-    plt.close()
-
-    print("Saved plot to layer_diffs/layer_diff_plot.png")
-
-
-
 
 
 
@@ -315,55 +267,16 @@ if args.save and 'ReLU' in args.model_type:
 
 
 
-    # Test with normalized input
-    # sample = np.expand_dims(data.x_test[0], axis=0)  # Add batch dimension
-    # sample = np.expand_dims(data.x_test[0], axis=0)  # Add batch dimension
-    # output_original = model.predict(sample)
-    # output_fused = model1.predict(sample)
-
-    # def get_layer_outputs(model, input):
-    #     outputs = {}
-    #     x = input
-    #     for name, layer in model.named_children():  # Works for Sequential
-    #         x = layer(x)
-    #         outputs[name] = x.detach()  # Store output
-    #     return outputs
-    # def get_layer_outputs(model, input):
-    #     outputs = {}
-    #     x = input
-    #     for name, layer in model.named_children():  # Works for Sequential
-    #         x = layer(x)
-    #         outputs[name] = x.detach()  # Store output
-    #     return outputs
-
-    # # Get outputs for both models
-    # outputs_orig = get_layer_outputs(model, sample)
-    # outputs_fused = get_layer_outputs(model1, sample)
-    # # Get outputs for both models
-    # outputs_orig = get_layer_outputs(model, sample)
-    # outputs_fused = get_layer_outputs(model1, sample)
 
 
     # Check if outputs are close
     # print("Outputs close?", np.allclose(output_original, output_fused, atol=1e-6))
     # 2. Save preprocessed ReLU model.
-    model.save_weights(args.logging_dir + '/' + args.model_name + '_preprocessed.weights.h5')
+    model.save_weights(args.logging_dir + '/' + args.model_name + '_orginal.weights.h5')
+    fused_model.save_weights(args.logging_dir + '/' + args.model_name + '_fused_model.weights.h5')
     logging.info('saved preprocessed ReLU model')
-    if args.findMax:
-      # 3. Find maximum layer outputs.
-      logging.info('calculating maximum layer output...')
-      layer_num, X_n = 0, []
-      layers_max = []
-      for k, layer in enumerate(model.layers):
-          if 'conv' in layer.name or 'dense' in layer.name:
-              if k != len(model.layers) - 2:
-                  # Apply ReLU first
-                  relu_output = ReLU()(layer.output)
-                  
-                  # Wrap tf.reduce_max in a Lambda layer
-                  max_output = Lambda(lambda x: tf.reduce_max(x))(relu_output)
-                  
-                  layers_max.append(max_output)
+
+
     if args.findMax:
       # 3. Find maximum layer outputs.
       logging.info('calculating maximum layer output...')
