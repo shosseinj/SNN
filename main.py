@@ -272,8 +272,8 @@ if args.save and 'ReLU' in args.model_type:
     # Check if outputs are close
     # print("Outputs close?", np.allclose(output_original, output_fused, atol=1e-6))
     # 2. Save preprocessed ReLU model.
-    model.save_weights(args.logging_dir + '/' + args.model_name + '_orginal.weights.h5')
-    fused_model.save_weights(args.logging_dir + '/' + args.model_name + '_fused_model.weights.h5')
+    model.save_weights('weights/' + args.model_name + '_orginal.weights.h5')
+    fused_model.save_weights('weights/' + args.model_name + '_fused_model.weights.h5')
     logging.info('saved preprocessed ReLU model')
 
 

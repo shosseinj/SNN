@@ -1,10 +1,6 @@
 INFO:root:#### Creating the model ####
-INFO:root:#### Loading weights ####
-INFO:root:#### Training ####
-INFO:root:fuse (imaginary) BN layers
-WARNING:tensorflow:5 out of the last 5 calls to <function TensorFlowTrainer.make_predict_function.<locals>.one_step_on_data_distributed at 0x0000025ED92096C0> triggered tf.function retracing. Tracing is expensive and the excessive number of tracings could be due to (1) creating @tf.function repeatedly in a loop, (2) passing tensors with different shapes, (3) passing Python objects instead of tensors. For (1), please define your @tf.function outside of the loop. For (2), @tf.function has reduce_retracing=True option that can avoid unnecessary retracing. For (3), please refer to https://www.tensorflow.org/guide/function#controlling_retracing and https://www.tensorflow.org/api_docs/python/tf/function for  more details.
-WARNING:tensorflow:6 out of the last 6 calls to <function TensorFlowTrainer.make_predict_function.<locals>.one_step_on_data_distributed at 0x0000025EF84E7420> triggered tf.function retracing. Tracing is expensive and the excessive number of tracings could be due to (1) creating @tf.function repeatedly in a loop, (2) passing tensors with different shapes, (3) passing Python objects instead of tensors. For (1), please define your @tf.function outside of the loop. For (2), @tf.function has reduce_retracing=True option that can avoid unnecessary retracing. For (3), please refer to https://www.tensorflow.org/guide/function#controlling_retracing and https://www.tensorflow.org/api_docs/python/tf/function for  more details.
-INFO:root:Model fusion verified: (np.float64(1.8041124150158794e-16), {'conv2d_1': np.float64(96.08684493333664), 'conv2d_2': np.float64(101.78038562939894), 'conv2d_3': np.float64(51.180778967991614), 'conv2d_4': np.float64(13.751598016175379), 'conv2d_5': np.float64(6.883290199374286), 'conv2d_6': np.float64(7.278756242583219), 'conv2d_7': np.float64(8.362466991690885), 'conv2d_8': np.float64(7.294342331576258), 'conv2d_9': np.float64(9.349478160675654), 'conv2d_10': np.float64(8.667573242231253), 'conv2d_11': np.float64(14.175354758822143), 'conv2d_12': np.float64(10.235841116128919), 'conv2d_13': np.float64(13.123338220187126)})
+INFO:root:#### Loading weights =>  weights/cifar10vgg.h5
+DEBUG:h5py._conv:Creating converter from 3 to 5
 DEBUG:PIL.PngImagePlugin:STREAM b'IHDR' 16 13
 DEBUG:PIL.PngImagePlugin:STREAM b'sBIT' 41 4
 DEBUG:PIL.PngImagePlugin:b'sBIT' 41 4 (unknown)
@@ -95,52 +91,3 @@ DEBUG:PIL.PngImagePlugin:STREAM b'sBIT' 41 4
 DEBUG:PIL.PngImagePlugin:b'sBIT' 41 4 (unknown)
 DEBUG:PIL.PngImagePlugin:STREAM b'pHYs' 57 9
 DEBUG:PIL.PngImagePlugin:STREAM b'IDAT' 78 364
-DEBUG:PIL.PngImagePlugin:STREAM b'IHDR' 16 13
-DEBUG:PIL.PngImagePlugin:STREAM b'sBIT' 41 4
-DEBUG:PIL.PngImagePlugin:b'sBIT' 41 4 (unknown)
-DEBUG:PIL.PngImagePlugin:STREAM b'pHYs' 57 9
-DEBUG:PIL.PngImagePlugin:STREAM b'IDAT' 78 1189
-DEBUG:PIL.PngImagePlugin:STREAM b'IHDR' 16 13
-DEBUG:PIL.PngImagePlugin:STREAM b'sBIT' 41 4
-DEBUG:PIL.PngImagePlugin:b'sBIT' 41 4 (unknown)
-DEBUG:PIL.PngImagePlugin:STREAM b'pHYs' 57 9
-DEBUG:PIL.PngImagePlugin:STREAM b'IDAT' 78 2994
-DEBUG:PIL.PngImagePlugin:STREAM b'IHDR' 16 13
-DEBUG:PIL.PngImagePlugin:STREAM b'sBIT' 41 4
-DEBUG:PIL.PngImagePlugin:b'sBIT' 41 4 (unknown)
-DEBUG:PIL.PngImagePlugin:STREAM b'pHYs' 57 9
-DEBUG:PIL.PngImagePlugin:STREAM b'IDAT' 78 374
-DEBUG:PIL.PngImagePlugin:STREAM b'IHDR' 16 13
-DEBUG:PIL.PngImagePlugin:STREAM b'sBIT' 41 4
-DEBUG:PIL.PngImagePlugin:b'sBIT' 41 4 (unknown)
-DEBUG:PIL.PngImagePlugin:STREAM b'pHYs' 57 9
-DEBUG:PIL.PngImagePlugin:STREAM b'IDAT' 78 286
-DEBUG:PIL.PngImagePlugin:STREAM b'IHDR' 16 13
-DEBUG:PIL.PngImagePlugin:STREAM b'sBIT' 41 4
-DEBUG:PIL.PngImagePlugin:b'sBIT' 41 4 (unknown)
-DEBUG:PIL.PngImagePlugin:STREAM b'pHYs' 57 9
-DEBUG:PIL.PngImagePlugin:STREAM b'IDAT' 78 263
-DEBUG:PIL.PngImagePlugin:STREAM b'IHDR' 16 13
-DEBUG:PIL.PngImagePlugin:STREAM b'sBIT' 41 4
-DEBUG:PIL.PngImagePlugin:b'sBIT' 41 4 (unknown)
-DEBUG:PIL.PngImagePlugin:STREAM b'pHYs' 57 9
-DEBUG:PIL.PngImagePlugin:STREAM b'IDAT' 78 387
-DEBUG:PIL.PngImagePlugin:STREAM b'IHDR' 16 13
-DEBUG:PIL.PngImagePlugin:STREAM b'sBIT' 41 4
-DEBUG:PIL.PngImagePlugin:b'sBIT' 41 4 (unknown)
-DEBUG:PIL.PngImagePlugin:STREAM b'pHYs' 57 9
-DEBUG:PIL.PngImagePlugin:STREAM b'IDAT' 78 436
-DEBUG:PIL.PngImagePlugin:STREAM b'IHDR' 16 13
-DEBUG:PIL.PngImagePlugin:STREAM b'sBIT' 41 4
-DEBUG:PIL.PngImagePlugin:b'sBIT' 41 4 (unknown)
-DEBUG:PIL.PngImagePlugin:STREAM b'pHYs' 57 9
-DEBUG:PIL.PngImagePlugin:STREAM b'IDAT' 78 351
-DEBUG:PIL.PngImagePlugin:STREAM b'IHDR' 16 13
-DEBUG:PIL.PngImagePlugin:STREAM b'sBIT' 41 4
-DEBUG:PIL.PngImagePlugin:b'sBIT' 41 4 (unknown)
-DEBUG:PIL.PngImagePlugin:STREAM b'pHYs' 57 9
-DEBUG:PIL.PngImagePlugin:STREAM b'IDAT' 78 364
-INFO:root:None
-INFO:root:None
-DEBUG:h5py._conv:Creating converter from 5 to 3
-INFO:root:saved preprocessed ReLU model
