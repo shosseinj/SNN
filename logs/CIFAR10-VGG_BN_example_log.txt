@@ -1,6 +1,6 @@
 INFO:root:#### Creating the model ####
-INFO:root:#### Loading weights =>  weights/cifar10vgg.h5
 DEBUG:h5py._conv:Creating converter from 3 to 5
+INFO:root:#### Loading weights =>  weights/cifar10vgg.h5
 DEBUG:PIL.PngImagePlugin:STREAM b'IHDR' 16 13
 DEBUG:PIL.PngImagePlugin:STREAM b'sBIT' 41 4
 DEBUG:PIL.PngImagePlugin:b'sBIT' 41 4 (unknown)

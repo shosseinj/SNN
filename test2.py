@@ -20,18 +20,6 @@ from tensorflow.keras.models import Model
 import os
 from tensorflow.keras.callbacks import Callback
 
-class SaveWeightsEveryNEpochs(Callback):
-    def __init__(self, save_path, n=10):
-        super().__init__()
-        self.save_path = save_path
-        self.n = n
-        os.makedirs(save_path, exist_ok=True)
-
-    def on_epoch_end(self, epoch, logs=None):
-        if (epoch + 1) % self.n == 0:
-            filename = os.path.join(self.save_path, f'weights_epoch_{epoch + 1}.weights.h5')
-            self.model.save_weights(filename)
-            print(f'\nSaved weights at epoch {epoch + 1} to {filename}')
 
 
 
@@ -110,39 +98,45 @@ if 'VGG' in args.model_name:
         model = create_vgg_model_SNN(layers2D, kernel_size, layers1D, data, optimizer, robustness_params=robustness_params,
                                      kernel_regularizer=regularizer, kernel_initializer=initializer)
     if 'ReLU' in args.model_type:
-        model = create_vgg_model_ReLU (layers2D, kernel_size, layers1D, data, BN=BN, optimizer=optimizer,
-                                       kernel_regularizer=regularizer, kernel_initializer=initializer)
-if model is None:
-    print('Please specify a valid model. Exiting.')
-    exit(1)
+        model =  cifar10vgg()
+        # model = create_vgg_model_ReLU (layers2D, kernel_size, layers1D, data, BN=BN, optimizer=optimizer,
+        #                                kernel_regularizer=regularizer, kernel_initializer=initializer)
+# if model is None:
+#     print('Please specify a valid model. Exiting.')
+#     exit(1)
 
 
 if args.load != 'False':
     logging.info(f"#### Loading weights =>  weights/{args.load}")
-    model.load_weights('weights/'+args.load)
+    # model.load_weights('weights/cifar10vgg.h5')
+    # model.load_weights('weights/'+args.load)
 
 
 
 
 
+from keras.datasets import cifar10
 
-fused_model = fuse_bn_functional(model)
+model = cifar10vgg()
+
+fused_model = model
+# fused_model = fuse_bn_functional(model)
 
 
-data.x_test, data.x_train = (data.x_test - data.p)/(data.q-data.p), (data.x_train - data.p)/(data.q-data.p)
-BN = 'BN' in args.model_name
-
-
-
-test_input = (data.x_test[0:1] - data.p) / (data.q - data.p)
-original_output = model(test_input, training=False).numpy()
-fused_output    = fused_model(test_input, training=False).numpy()
+# data.x_test, data.x_train = (data.x_test - data.p)/(data.q-data.p), (data.x_train - data.p)/(data.q-data.p)
+# BN = 'BN' in args.model_name
 
 
 
-print("Original model output:", original_output)
-print("Fused model output:", fused_output)
-print("Max difference:", np.abs(original_output - fused_output).max())
+# test_input = (data.x_test[0:1] - data.p) / (data.q - data.p)
+# original_output = model(test_input, training=False).numpy()
+# fused_output    = fused_model(test_input, training=False).numpy()
+
+
+
+# print("Original model output:", original_output)
+# print("Fused model output:", fused_output)
+# print("Max difference:", np.abs(original_output - fused_output).max())
 
 
 import matplotlib.pyplot as plt
@@ -161,38 +155,57 @@ idx = 13
 img = data.x_test[idx]
 label = np.argmax(data.y_test[idx])
 
+(x_train, y_train), (x_test, y_test) = cifar10.load_data()
+x_test = x_test.astype('float32')
 # Undo normalization for display
-img_display = img * (data.q - data.p) + data.p
-img_display = np.clip(img_display, 0, 1)
+index = 42  # change this to any number between 0 and 9999
+test_image = x_test[index]
+true_label = y_test[index][0]
 
-# Save image
-plt.figure(figsize=(2, 2))
-plt.imshow(img_display)
+# Display the image with its true label
+plt.imshow(test_image.astype('uint8'))
+plt.title(f"True Label: {true_label}")
 plt.axis('off')
-plt.title(f"True label: {class_names[label]}")
-plt.savefig(f"model_comparison_plots/test_image_{idx}.png", bbox_inches='tight')
-plt.close()
+plt.show()
 
-# Prepare image for model input
-test_input = (img - data.p) / (data.q - data.p)
-test_input = np.expand_dims(test_input, axis=0)
+# Prepare image for prediction
+test_image_batch = np.expand_dims(test_image, axis=0)  # add batch dimension
 
-# Get predictions
-orig_pred = model(test_input, training=False).numpy().flatten()
-fused_pred = fused_model(test_input, training=False).numpy().flatten()
+# Initialize model (this will load pretrained weights if available)
+model = cifar10vgg()
 
-# Save bar chart
-x = np.arange(len(class_names))
-width = 0.35
-plt.figure(figsize=(8, 4))
-plt.bar(x - width/2, orig_pred, width, label='Original')
-plt.bar(x + width/2, fused_pred, width, label='Fused')
-plt.xticks(x, class_names, rotation=45)
-plt.ylabel('Probability')
-plt.legend()
-plt.tight_layout()
-plt.savefig(f"model_comparison_plots/prediction_comparison_{idx}.png")
-plt.close()
+# Predict class
+predicted_prob = model.predict(test_image_batch)
+predicted_class = np.argmax(predicted_prob)
+
+# Show image with predicted label
+plt.imshow(test_image.astype('uint8'))
+plt.title(f"Predicted: {predicted_class} | True: {true_label}")
+plt.axis('off')
+plt.show()
+# Save image
+
+
+# # Prepare image for model input
+# test_input = (img - data.p) / (data.q - data.p)
+# test_input = np.expand_dims(test_input, axis=0)
+
+# # Get predictions
+# orig_pred = model(test_input, training=False).numpy().flatten()
+# fused_pred = fused_model(test_input, training=False).numpy().flatten()
+
+# # Save bar chart
+# x = np.arange(len(class_names))
+# width = 0.35
+# plt.figure(figsize=(8, 4))
+# plt.bar(x - width/2, orig_pred, width, label='Original')
+# plt.bar(x + width/2, fused_pred, width, label='Fused')
+# plt.xticks(x, class_names, rotation=45)
+# plt.ylabel('Probability')
+# plt.legend()
+# plt.tight_layout()
+# plt.savefig(f"model_comparison_plots/prediction_comparison_{idx}.png")
+# plt.close()
 
 print(f"Saved image and prediction chart for test index {idx} in 'model_comparison_plots/'")
 
@@ -208,3 +221,7 @@ print(f"Saved image and prediction chart for test index {idx} in 'model_comparis
 if args.showSummmary:
     logging.info(model.summary())
     logging.info(fused_model.summary())
+
+
+
+

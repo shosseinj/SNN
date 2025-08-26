@@ -1,3 +1,4 @@
+from __future__ import print_function
 import logging
 import tensorflow as tf
 from tensorflow.keras.layers import Conv2D, Input, Dense, MaxPool2D, Flatten, Dropout, BatchNormalization
@@ -233,148 +234,148 @@ def create_vgg_model_ReLU(layers2D, kernel_size, layers1D, data, BN, dropout=0.3
     return model
 
 
-# def create_vgg_model_ReLU(layers2D, kernel_size, layers1D, data, BN, dropout=0, optimizer='adam',
-#                           kernel_regularizer=None, kernel_initializer='glorot_uniform'):
-#     """
-#     Create a VGG-like ReLU network for various dataset.
-#     """
-#     inputs = Input(shape=data.input_shape)
-#     i_conv = 0
-#     i_bn = 0
-#     i_dense = 0
-#     for k, f in enumerate(layers2D):
-#         if f!='pool':
-#             i_conv += 1
-#             if k==0:
-#                 x=Conv2D(f,  kernel_size, padding='same', activation=None,
-#                          kernel_regularizer=kernel_regularizer,
-#                          kernel_initializer=kernel_initializer,
-#                          name='conv2d_'+str(i_conv))(inputs)
-#             else:
-#                 x=Conv2D(f,  kernel_size, padding='same', activation=None,
-#                          kernel_regularizer=kernel_regularizer,
-#                          kernel_initializer=kernel_initializer,
-#                          name='conv2d_'+str(i_conv))(x)
-#             x = tf.keras.layers.Activation('relu')(x)
-#             if BN:
-#                 i_bn += 1
-#                 x=BatchNormalization(name='batch_normalization_'+str(i_bn))(x)
-#             x = Dropout(dropout)(x)
-#         else:
-#             x=MaxPool2D()(x)
-#     x=Flatten()(x)
-#     for j, d in enumerate(layers1D):
-#         i_dense +=1
-#         x=Dense(d, activation=None,
-#                 kernel_regularizer=kernel_regularizer,
-#                 kernel_initializer=kernel_initializer,
-#                 name='dense_'+str(i_dense))(x)
-#         x = tf.keras.layers.Activation('relu')(x)
-#         if BN:
-#             i_bn += 1
-#             x=BatchNormalization(name='batch_normalization_'+str(i_bn))(x)
-#         x = Dropout(dropout)(x)
-#     i_dense +=1
-#     outputs=Dense(data.num_of_classes, activation='softmax',
-#                   kernel_regularizer=kernel_regularizer,
-#                   #kernel_initializer=kernel_initializer, #logits - should be standard glorot
-#                   name='dense_' +str(i_dense))(x)
-#     model = Model (inputs=inputs, outputs=outputs)
-#     model.compile(metrics=['accuracy'], loss=tf.keras.losses.CategoricalCrossentropy(from_logits=True), optimizer=optimizer)
-#     return model
 
 
-def create_vgg_model_SNN(layers2D, kernel_size, layers1D, data, optimizer, X_n=1000,
-                         robustness_params={}, kernel_regularizer=None, kernel_initializer='glorot_uniform'):
-    """
-    Create VGG-like network. Tested on various datasets.
-    """
-    min_ti=[]
-    tj = Input(shape=data.input_shape) 
-    ti = SpikingConv2D(layers2D[0], 'conv2d_1', (X_n[0] if type(X_n)==list else X_n),
-                       kernel_regularizer=kernel_regularizer, kernel_initializer=kernel_initializer,
-                       padding='same', kernel_size=kernel_size,
-                       robustness_params=robustness_params)(tj)
-    min_ti.append(tf.reduce_min(ti))
-    j, image_size =1, data.input_shape[0]
-    for f in layers2D[1:]:
-        if f!='pool':
-            ti = SpikingConv2D(f, 'conv2d_' +str(1+j), (X_n[j] if type(X_n)==list else X_n),
-                               kernel_regularizer=kernel_regularizer, kernel_initializer=kernel_initializer,
-                               padding='same', kernel_size=kernel_size, robustness_params=robustness_params)(ti)
-            min_ti.append(tf.reduce_min(ti))
-            j=j+1
+
+
+import keras
+from keras.datasets import cifar10
+from keras.models import Sequential
+from keras.layers import Dense, Dropout, Activation, Flatten
+from keras.layers import Conv2D, MaxPooling2D, BatchNormalization
+from keras import optimizers
+import numpy as np
+from keras import backend as K
+from keras import regularizers
+
+class cifar10vgg:
+    def __init__(self,train=False):
+        self.num_classes = 10
+        self.weight_decay = 0.0005
+        self.x_shape = [32,32,3]
+
+        self.model = self.build_model()
+        if train:
+            self.model = self.train(self.model)
         else:
-            ti, image_size=-MaxMinPool2D()(-ti), image_size//2
-    ti=Flatten()(ti)
-    i_dense = 1
-    ti =SpikingDense(layers1D[0], 'dense_'+str(i_dense), (X_n[j] if type(X_n)==list else X_n),
-                     kernel_regularizer=kernel_regularizer, kernel_initializer=kernel_initializer,
-                     robustness_params=robustness_params, input_dim=(image_size**2)*layers2D[-2])(ti)
-    min_ti.append(tf.reduce_min(ti))
-    j, k=j+1, 0
-    for k, d in enumerate(layers1D[1:]):
-        i_dense +=1
-        ti =SpikingDense(d, 'dense_'+str(i_dense), (X_n[j] if type(X_n)==list else X_n),
-                         kernel_regularizer=kernel_regularizer, kernel_initializer=kernel_initializer,
-                         robustness_params=robustness_params)(ti)
-        min_ti.append(tf.reduce_min(ti))
-        j+=1
-    i_dense +=1
-    outputs =SpikingDense(data.num_of_classes, 'dense_'+str(i_dense), outputLayer=True,
-                          kernel_regularizer=kernel_regularizer,
-                          robustness_params=robustness_params)(ti)
-    model = ModelTmax (inputs=tj, outputs=[outputs, min_ti])  
-    model.compile(metrics=['accuracy'], loss=tf.keras.losses.CategoricalCrossentropy(from_logits=True), optimizer=optimizer)
-    return model
+            self.model.load_weights('weights/cifar10vgg.h5')
 
 
-def create_fc_model_ReLU(layers = 2, optimizer='adam'):
-    """
-    Create a 2-layer fully-connected ReLU network to for MNIST dataset.
-    """
-    inputs = Input(shape=(784))
-    x = Dense(340, activation=None, name='dense_1')(inputs)
-    x = tf.keras.layers.Activation('relu')(x)
-    for i in range(layers-2):
-        x = Dense(340, activation=None, name='dense_'+str(i+2))(x)
-        x = tf.keras.layers.Activation('relu')(x)
-    outputs = Dense(10, activation=None, name='dense_output')(x)
-    model = Model (inputs=inputs, outputs=outputs)
-    model.compile(loss=tf.keras.losses.CategoricalCrossentropy(from_logits=True), optimizer=optimizer, metrics=["categorical_accuracy"])
-    return model
+    def build_model(self):
+        # Build the network of vgg for 10 classes with massive dropout and weight decay as described in the paper.
+
+        model = Sequential()
+        weight_decay = self.weight_decay
+
+        model.add(Conv2D(64, (3, 3), padding='same',
+                         input_shape=self.x_shape,kernel_regularizer=regularizers.l2(weight_decay)))
+        model.add(Activation('relu'))
+        model.add(BatchNormalization())
+        model.add(Dropout(0.3))
+
+        model.add(Conv2D(64, (3, 3), padding='same',kernel_regularizer=regularizers.l2(weight_decay)))
+        model.add(Activation('relu'))
+        model.add(BatchNormalization())
+
+        model.add(MaxPooling2D(pool_size=(2, 2)))
+
+        model.add(Conv2D(128, (3, 3), padding='same',kernel_regularizer=regularizers.l2(weight_decay)))
+        model.add(Activation('relu'))
+        model.add(BatchNormalization())
+        model.add(Dropout(0.4))
+
+        model.add(Conv2D(128, (3, 3), padding='same',kernel_regularizer=regularizers.l2(weight_decay)))
+        model.add(Activation('relu'))
+        model.add(BatchNormalization())
+
+        model.add(MaxPooling2D(pool_size=(2, 2)))
+
+        model.add(Conv2D(256, (3, 3), padding='same',kernel_regularizer=regularizers.l2(weight_decay)))
+        model.add(Activation('relu'))
+        model.add(BatchNormalization())
+        model.add(Dropout(0.4))
+
+        model.add(Conv2D(256, (3, 3), padding='same',kernel_regularizer=regularizers.l2(weight_decay)))
+        model.add(Activation('relu'))
+        model.add(BatchNormalization())
+        model.add(Dropout(0.4))
+
+        model.add(Conv2D(256, (3, 3), padding='same',kernel_regularizer=regularizers.l2(weight_decay)))
+        model.add(Activation('relu'))
+        model.add(BatchNormalization())
+
+        model.add(MaxPooling2D(pool_size=(2, 2)))
 
 
-def create_fc_model_SNN(layers, optimizer, X_n=1000, robustness_params={}):
-    """
-    Create 2-layer fully connected network. Tested on MNIST dataset.
-    """
-    min_ti=[]
-    tj = Input(shape=784)
-    ti = SpikingDense(340, 'dense_1', X_n, robustness_params=robustness_params)(tj)
-    min_ti.append(tf.reduce_min(ti))
-    for i in range(layers-2):
-        ti = SpikingDense(340, 'dense_' + str(i+2), X_n, robustness_params=robustness_params)(ti)
-        min_ti.append(tf.reduce_min(ti))
-    outputs = SpikingDense(10, 'dense_output', outputLayer=True, robustness_params=robustness_params)(ti)
-    model = ModelTmax (inputs=tj, outputs=[outputs, min_ti])
-    model.compile(metrics=['accuracy'], loss=tf.keras.losses.CategoricalCrossentropy(from_logits=True), optimizer=optimizer)
-    return model
+        model.add(Conv2D(512, (3, 3), padding='same',kernel_regularizer=regularizers.l2(weight_decay)))
+        model.add(Activation('relu'))
+        model.add(BatchNormalization())
+        model.add(Dropout(0.4))
+
+        model.add(Conv2D(512, (3, 3), padding='same',kernel_regularizer=regularizers.l2(weight_decay)))
+        model.add(Activation('relu'))
+        model.add(BatchNormalization())
+        model.add(Dropout(0.4))
+
+        model.add(Conv2D(512, (3, 3), padding='same',kernel_regularizer=regularizers.l2(weight_decay)))
+        model.add(Activation('relu'))
+        model.add(BatchNormalization())
+
+        model.add(MaxPooling2D(pool_size=(2, 2)))
 
 
-def call_spiking(tj, W, D_i, t_min, t_max, noise):
-    """
-    Calculates spiking times from which ReLU functionality can be recovered.
-    Assumes tau_c=1 and B_i^(n)=1
-    """
-    # Calculate the spiking threshold (Eq. 18)
-    threshold = t_max - t_min - D_i
-    # Calculate output spiking time ti (Eq. 7)
-    ti = (tf.matmul(tj-t_min, W) + threshold + t_min)
-    # Ensure valid spiking time. Do not spike for ti >= t_max.
-    # No spike is modelled as t_max that cancels out in the next layer (tj-t_min) as t_min there is t_max
-    ti = tf.where(ti < t_max, ti, t_max)
-    # Add noise to the spiking time for noise simulations
-    ti = ti + tf.random.normal(tf.shape(ti), stddev=noise, dtype=tf.dtypes.float64)
-    return ti
+        model.add(Conv2D(512, (3, 3), padding='same',kernel_regularizer=regularizers.l2(weight_decay)))
+        model.add(Activation('relu'))
+        model.add(BatchNormalization())
+        model.add(Dropout(0.4))
 
+        model.add(Conv2D(512, (3, 3), padding='same',kernel_regularizer=regularizers.l2(weight_decay)))
+        model.add(Activation('relu'))
+        model.add(BatchNormalization())
+        model.add(Dropout(0.4))
+
+        model.add(Conv2D(512, (3, 3), padding='same',kernel_regularizer=regularizers.l2(weight_decay)))
+        model.add(Activation('relu'))
+        model.add(BatchNormalization())
+
+        model.add(MaxPooling2D(pool_size=(2, 2)))
+        model.add(Dropout(0.5))
+
+        model.add(Flatten())
+        model.add(Dense(512,kernel_regularizer=regularizers.l2(weight_decay)))
+        model.add(Activation('relu'))
+        model.add(BatchNormalization())
+
+        model.add(Dropout(0.5))
+        model.add(Dense(self.num_classes))
+        model.add(Activation('softmax'))
+        return model
+
+
+    def normalize(self,X_train,X_test):
+        #this function normalize inputs for zero mean and unit variance
+        # it is used when training a model.
+        # Input: training set and test set
+        # Output: normalized training set and test set according to the trianing set statistics.
+        mean = np.mean(X_train,axis=(0,1,2,3))
+        std = np.std(X_train, axis=(0, 1, 2, 3))
+        X_train = (X_train-mean)/(std+1e-7)
+        X_test = (X_test-mean)/(std+1e-7)
+        return X_train, X_test
+
+    def normalize_production(self,x):
+        #this function is used to normalize instances in production according to saved training set statistics
+        # Input: X - a training set
+        # Output X - a normalized training set according to normalization constants.
+
+        #these values produced during first training and are general for the standard cifar10 training set normalization
+        mean = 120.707
+        std = 64.15
+        return (x-mean)/(std+1e-7)
+
+    def predict(self,x,normalize=True,batch_size=50):
+        if normalize:
+            x = self.normalize_production(x)
+        return self.model.predict(x,batch_size)
+
+    
