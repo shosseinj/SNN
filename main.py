@@ -128,7 +128,7 @@ if args.load != 'False':
         # Load weights
         if args.load :  # automatic name
             print('path=', args.logging_dir +'/'+args.load)
-            model.load_weights(args.logging_dir +'/'+args.load)
+            # model.load_weights('weights/'+args.load)
         # else:  # custom name
         #     model.load_weights(args.logging_dir + args.load, by_name=True)
     if 'SNN' in args.model_type:

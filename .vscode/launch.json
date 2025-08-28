@@ -6,7 +6,7 @@
             "type": "python",
             "request": "launch",
             "program": "${workspaceFolder}/test2.py",
-            "python": "${workspaceFolder}/myvenv/Scripts/python.exe",
+            "python": "${workspaceFolder}/myvenv1/Scripts/python.exe",
             "args": [
                 "--model_type=ReLU",
                 "--model_name=VGG_BN_example",

@@ -44,7 +44,7 @@ parser.add_argument('--load', type=str, default='False', help='Load before train
 parser.add_argument('--save', type=strtobool, default=False, help='Store after training.')
 # Robustness parameters:fused_model
 parser.add_argument('--findMax', type=strtobool, default=False, help='Store after training.')
-parser.add_argument('--showSummmary', type=strtobool, default=False, help='Store after training.')
+parser.add_argument('--showSummmary', type=strtobool, default=True, help='Store after training.')
 # Robustness parameters:fused_model
 
 parser.add_argument('--noise', type=float, default=0.0, help='Noise std.dev.')
@@ -98,9 +98,9 @@ if 'VGG' in args.model_name:
         model = create_vgg_model_SNN(layers2D, kernel_size, layers1D, data, optimizer, robustness_params=robustness_params,
                                      kernel_regularizer=regularizer, kernel_initializer=initializer)
     if 'ReLU' in args.model_type:
-        model =  cifar10vgg()
+        model =  VGG16()
         # model = create_vgg_model_ReLU (layers2D, kernel_size, layers1D, data, BN=BN, optimizer=optimizer,
-        #                                kernel_regularizer=regularizer, kernel_initializer=initializer)
+                                    #    kernel_regularizer=regularizer, kernel_initializer=initializer)
 # if model is None:
 #     print('Please specify a valid model. Exiting.')
 #     exit(1)
@@ -108,7 +108,7 @@ if 'VGG' in args.model_name:
 
 if args.load != 'False':
     logging.info(f"#### Loading weights =>  weights/{args.load}")
-    # model.load_weights('weights/cifar10vgg.h5')
+    model.load_weights('weights/cifar10vgg.h5')
     # model.load_weights('weights/'+args.load)
 
 
@@ -117,7 +117,7 @@ if args.load != 'False':
 
 from keras.datasets import cifar10
 
-model = cifar10vgg()
+# model = cifar10vgg()
 
 fused_model = model
 # fused_model = fuse_bn_functional(model)
@@ -150,39 +150,41 @@ os.makedirs("model_comparison_plots", exist_ok=True)
 class_names = ['airplane', 'automobile', 'bird', 'cat', 'deer', 
                 'dog', 'frog', 'horse', 'ship', 'truck']
 
-# Pick a test image index
-idx = 13
-img = data.x_test[idx]
-label = np.argmax(data.y_test[idx])
 
+import matplotlib.pyplot as plt
+import numpy as np
+from tensorflow.keras.datasets import cifar10
+
+# Load CIFAR-10 dataset
+index = 2
 (x_train, y_train), (x_test, y_test) = cifar10.load_data()
 x_test = x_test.astype('float32')
-# Undo normalization for display
-index = 42  # change this to any number between 0 and 9999
+
+# Extract a single image and its label
 test_image = x_test[index]
 true_label = y_test[index][0]
 
-# Display the image with its true label
-plt.imshow(test_image.astype('uint8'))
-plt.title(f"True Label: {true_label}")
-plt.axis('off')
-plt.show()
-
 # Prepare image for prediction
-test_image_batch = np.expand_dims(test_image, axis=0)  # add batch dimension
-
-# Initialize model (this will load pretrained weights if available)
-model = cifar10vgg()
-
-# Predict class
+test_image_batch = np.expand_dims(test_image, axis=0)
 predicted_prob = model.predict(test_image_batch)
 predicted_class = np.argmax(predicted_prob)
 
-# Show image with predicted label
-plt.imshow(test_image.astype('uint8'))
-plt.title(f"Predicted: {predicted_class} | True: {true_label}")
-plt.axis('off')
+# Create subplots
+fig, axes = plt.subplots(1, 2, figsize=(8, 4))
+
+# Plot the original image with true label
+axes[0].imshow(test_image.astype('uint8'))
+axes[0].set_title(f"True Label: {true_label}")
+axes[0].axis('off')
+
+# Plot the image with predicted class and true label
+axes[1].imshow(test_image.astype('uint8'))
+axes[1].set_title(f"Predicted: {predicted_class} | True: {true_label}")
+axes[1].axis('off')
+
+plt.tight_layout()
 plt.show()
+
 # Save image
 
 
@@ -207,7 +209,7 @@ plt.show()
 # plt.savefig(f"model_comparison_plots/prediction_comparison_{idx}.png")
 # plt.close()
 
-print(f"Saved image and prediction chart for test index {idx} in 'model_comparison_plots/'")
+print(f"Saved image and prediction chart for test index  in 'model_comparison_plots/'")
 
 
 

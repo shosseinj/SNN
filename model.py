@@ -1,10 +1,98 @@
-from __future__ import print_function
+from __future__ import print_function, absolute_import
 import logging
+import warnings
 import tensorflow as tf
-from tensorflow.keras.layers import Conv2D, Input, Dense, MaxPool2D, Flatten, Dropout, BatchNormalization
+from tensorflow.keras.layers import Conv2D, MaxPooling2D, Input, Dense, Flatten, Dropout, BatchNormalization
 from tensorflow.keras.models import Model
-from utils import *
-tf.keras.backend.set_floatx('float64')
+from tensorflow.keras.utils import get_source_inputs
+from tensorflow.keras.utils import get_file
+from tensorflow.keras.applications.imagenet_utils import decode_predictions, preprocess_input
+from tensorflow.keras import backend as K
+from tensorflow.keras.optimizers import Adam
+
+# Remove old keras imports completely
+# Old imports such as:
+# from keras.engine.topology import get_source_inputs
+# from keras.utils.layer_utils import convert_all_kernels_in_model
+# from keras.applications.imagenet_utils import _obtain_input_shape
+# are not needed or are already part of tensorflow.keras
+
+TH_WEIGHTS_PATH = 'https://github.com/fchollet/deep-learning-models/releases/download/v0.1/vgg16_weights_th_dim_ordering_th_kernels.h5'
+TF_WEIGHTS_PATH = 'https://github.com/fchollet/deep-learning-models/releases/download/v0.1/vgg16_weights_tf_dim_ordering_tf_kernels.h5'
+TH_WEIGHTS_PATH_NO_TOP = 'https://github.com/fchollet/deep-learning-models/releases/download/v0.1/vgg16_weights_th_dim_ordering_th_kernels_notop.h5'
+TF_WEIGHTS_PATH_NO_TOP = 'https://github.com/fchollet/deep-learning-models/releases/download/v0.1/vgg16_weights_tf_dim_ordering_tf_kernels_notop.h5'
+
+
+def VGG16(include_top=True, weights='imagenet',
+          input_tensor=None, input_shape=(224, 224, 3),
+          classes=1000):
+    """
+    VGG16 model updated for TensorFlow 2.x
+    """
+
+    model = Sequential()
+# Layer 1: Convolutional
+    model.add(Conv2D(input_shape=(224, 224, 3), filters=64, kernel_size=(3, 3),
+                    padding='same', activation='relu'))
+    # Layer 2: Convolutional
+    model.add(Conv2D(filters=64, kernel_size=(3,3), padding='same', activation='relu'))
+    # Layer 3: MaxPooling
+    model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+
+    # Layer 4: Convolutional
+    model.add(Conv2D(filters=128, kernel_size=(3,3), padding='same', activation='relu'))
+    # Layer 5: Convolutional
+    model.add(Conv2D(filters=128, kernel_size=(3,3), padding='same', activation='relu'))
+    # Layer 6: MaxPooling
+    model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+
+    # Layer 7: Convolutional
+    model.add(Conv2D(filters=256, kernel_size=(3,3), padding='same', activation='relu'))
+    # Layer 8: Convolutional
+    model.add(Conv2D(filters=256, kernel_size=(3,3), padding='same', activation='relu'))
+    # Layer 9: Convolutional
+    model.add(Conv2D(filters=256, kernel_size=(3,3), padding='same', activation='relu'))
+    # Layer 10: MaxPooling
+    model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+
+    # Layer 11: Convolutional
+    model.add(Conv2D(filters=512, kernel_size=(3,3), padding='same', activation='relu'))
+    # Layer 12: Convolutional
+    model.add(Conv2D(filters=512, kernel_size=(3,3), padding='same', activation='relu'))
+    # Layer 13: Convolutional
+    model.add(Conv2D(filters=512, kernel_size=(3,3), padding='same', activation='relu'))
+    # Layer 14: MaxPooling
+    model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+
+    # Layer 15: Convolutional
+    model.add(Conv2D(filters=512, kernel_size=(3,3), padding='same', activation='relu'))
+    # Layer 16: Convolutional
+    model.add(Conv2D(filters=512, kernel_size=(3,3), padding='same', activation='relu'))
+    # Layer 17: Convolutional
+    model.add(Conv2D(filters=512, kernel_size=(3,3), padding='same', activation='relu'))
+    # Layer 18: MaxPooling
+    model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+
+    # Layer 19: Flatten
+    model.add(Flatten())
+    # Layer 20: Fully Connected Layer
+    model.add(Dense(units=4096, activation='relu'))
+    # Layer 21: Fully Connected Layer
+    model.add(Dense(units=4096, activation='relu'))
+    # Layer 22: Softmax Layer
+    model.add(Dense(units=2, activation='softmax'))
+
+
+    # Load weights if needed
+    # if weights == 'imagenet':
+    #     weights_path = get_file(
+    #         'vgg16_weights_tf_dim_ordering_tf_kernels_notop.h5' if not include_top else
+    #         'vgg16_weights_tf_dim_ordering_tf_kernels.h5',
+    #         TF_WEIGHTS_PATH_NO_TOP if not include_top else TF_WEIGHTS_PATH,
+    #         cache_subdir='models')
+    model.load_weights('weights/cifar10-vgg16_model.h5')
+
+    return model
 
 
 class SpikingDense(tf.keras.layers.Layer):
@@ -176,61 +264,119 @@ class ModelTmax(tf.keras.Model):
 
 def create_vgg_model_ReLU(layers2D, kernel_size, layers1D, data, BN, dropout=0.3 ,optimizer='adam',
                          kernel_regularizer=None, kernel_initializer='glorot_uniform'):
-    inputs = Input(shape=data.input_shape)
-    i_conv = 0
-    i_bn = 0
-    i_dense = 0
+    # inputs = Input(shape=data.input_shape)
+    # i_conv = 0
+    # i_bn = 0
+    # i_dense = 0
     
-    for k, f in enumerate(layers2D):
-        if f != 'pool':
-            i_conv += 1
-            if k == 0:
-                x = Conv2D(f, kernel_size, padding='same', activation=None,
-                          kernel_regularizer=kernel_regularizer,
-                          kernel_initializer=kernel_initializer,
-                          name='conv2d_'+str(i_conv))(inputs)
-            else:
-                x = Conv2D(f, kernel_size, padding='same', activation=None,
-                          kernel_regularizer=kernel_regularizer,
-                          kernel_initializer=kernel_initializer,
-                          name='conv2d_'+str(i_conv))(x)
+    # for k, f in enumerate(layers2D):
+    #     if f != 'pool':
+    #         i_conv += 1
+    #         if k == 0:
+    #             x = Conv2D(f, kernel_size, padding='same', activation=None,
+    #                       kernel_regularizer=kernel_regularizer,
+    #                       kernel_initializer=kernel_initializer,
+    #                       name='conv2d_'+str(i_conv))(inputs)
+    #         else:
+    #             x = Conv2D(f, kernel_size, padding='same', activation=None,
+    #                       kernel_regularizer=kernel_regularizer,
+    #                       kernel_initializer=kernel_initializer,
+    #                       name='conv2d_'+str(i_conv))(x)
             
-            # Changed order: BN before Activation
-            if BN:
-                i_bn += 1
-                x = BatchNormalization(name='batch_normalization_'+str(i_bn))(x)
+    #         # Changed order: BN before Activation
+    #         if BN:
+    #             i_bn += 1
+    #             x = BatchNormalization(name='batch_normalization_'+str(i_bn))(x)
             
-            x = tf.keras.layers.Activation('relu')(x)
-            x = Dropout(dropout)(x)
-        else:
-            x = MaxPool2D()(x)
+    #         x = tf.keras.layers.Activation('relu')(x)
+    #         x = Dropout(dropout)(x)
+    #     else:
+    #         x = MaxPooling2D()(x)
     
-    x = Flatten()(x)
+    # x = Flatten()(x)
     
-    for j, d in enumerate(layers1D):
-        i_dense += 1
-        x = Dense(d, activation=None,
-                 kernel_regularizer=kernel_regularizer,
-                 kernel_initializer=kernel_initializer,
-                 name='dense_'+str(i_dense))(x)
+    # for j, d in enumerate(layers1D):
+    #     i_dense += 1
+    #     x = Dense(d, activation=None,
+    #              kernel_regularizer=kernel_regularizer,
+    #              kernel_initializer=kernel_initializer,
+    #              name='dense_'+str(i_dense))(x)
         
-        # Changed order for dense layers too
-        if BN:
-            i_bn += 1
-            x = BatchNormalization(name='batch_normalization_'+str(i_bn))(x)
+    #     # Changed order for dense layers too
+    #     if BN:
+    #         i_bn += 1
+    #         x = BatchNormalization(name='batch_normalization_'+str(i_bn))(x)
         
-        x = tf.keras.layers.Activation('relu')(x)
-        x = Dropout(dropout)(x)
+    #     x = tf.keras.layers.Activation('relu')(x)
+    #     x = Dropout(dropout)(x)
     
-    i_dense += 1
-    x = Dense(data.num_of_classes, activation='softmax',
-                   kernel_regularizer=kernel_regularizer,
-                   name='dense_' + str(i_dense))(x)
-    outputs = x
-    model = Model(inputs=inputs, outputs=outputs)
-    model.compile(metrics=['accuracy'], 
-                 loss=tf.keras.losses.CategoricalCrossentropy(from_logits=False),  # Changed to False
-                 optimizer=optimizer)
+    # i_dense += 1
+    # x = Dense(data.num_of_classes, activation='softmax',
+    #                kernel_regularizer=kernel_regularizer,
+    #                name='dense_' + str(i_dense))(x)
+    # outputs = x
+    # model = Model(inputs=inputs, outputs=outputs)
+    # model.compile(metrics=['accuracy'], 
+    #              loss=tf.keras.losses.CategoricalCrossentropy(from_logits=False),  # Changed to False
+    #              optimizer=optimizer)
+
+    model = Sequential()
+# Layer 1: Convolutional
+    model.add(Conv2D(input_shape=(224, 224, 3), filters=64, kernel_size=(3, 3),
+                    padding='same', activation='relu'))
+    # Layer 2: Convolutional
+    model.add(Conv2D(filters=64, kernel_size=(3,3), padding='same', activation='relu'))
+    # Layer 3: MaxPooling
+    model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+
+    # Layer 4: Convolutional
+    model.add(Conv2D(filters=128, kernel_size=(3,3), padding='same', activation='relu'))
+    # Layer 5: Convolutional
+    model.add(Conv2D(filters=128, kernel_size=(3,3), padding='same', activation='relu'))
+    # Layer 6: MaxPooling
+    model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+
+    # Layer 7: Convolutional
+    model.add(Conv2D(filters=256, kernel_size=(3,3), padding='same', activation='relu'))
+    # Layer 8: Convolutional
+    model.add(Conv2D(filters=256, kernel_size=(3,3), padding='same', activation='relu'))
+    # Layer 9: Convolutional
+    model.add(Conv2D(filters=256, kernel_size=(3,3), padding='same', activation='relu'))
+    # Layer 10: MaxPooling
+    model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+
+    # Layer 11: Convolutional
+    model.add(Conv2D(filters=512, kernel_size=(3,3), padding='same', activation='relu'))
+    # Layer 12: Convolutional
+    model.add(Conv2D(filters=512, kernel_size=(3,3), padding='same', activation='relu'))
+    # Layer 13: Convolutional
+    model.add(Conv2D(filters=512, kernel_size=(3,3), padding='same', activation='relu'))
+    # Layer 14: MaxPooling
+    model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+
+    # Layer 15: Convolutional
+    model.add(Conv2D(filters=512, kernel_size=(3,3), padding='same', activation='relu'))
+    # Layer 16: Convolutional
+    model.add(Conv2D(filters=512, kernel_size=(3,3), padding='same', activation='relu'))
+    # Layer 17: Convolutional
+    model.add(Conv2D(filters=512, kernel_size=(3,3), padding='same', activation='relu'))
+    # Layer 18: MaxPooling
+    model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+
+    # Layer 19: Flatten
+    model.add(Flatten())
+    # Layer 20: Fully Connected Layer
+    model.add(Dense(units=4096, activation='relu'))
+    # Layer 21: Fully Connected Layer
+    model.add(Dense(units=4096, activation='relu'))
+    # Layer 22: Softmax Layer
+    model.add(Dense(units=2, activation='softmax'))
+
+    # Add Optimizer and check accuracy metrics
+    optimizer = Adam(learning_rate=0.001)
+    model.compile(optimizer=optimizer, loss=keras.losses.categorical_crossentropy,
+                metrics=['accuracy'])
+# Check model summary
     return model
 
 
@@ -242,7 +388,6 @@ import keras
 from keras.datasets import cifar10
 from keras.models import Sequential
 from keras.layers import Dense, Dropout, Activation, Flatten
-from keras.layers import Conv2D, MaxPooling2D, BatchNormalization
 from keras import optimizers
 import numpy as np
 from keras import backend as K
