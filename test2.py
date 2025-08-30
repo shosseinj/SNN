@@ -120,9 +120,6 @@ from keras.datasets import cifar10
 fused_model = fuse_bn_functional(model)
 
 
-if args.showSummmary:
-    logging.info(model.summary())
-    # logging.info(fused_model.summary())
 
 
 
@@ -200,6 +197,9 @@ for i in range(len(x_sample)):
 max_diff = np.max(np.abs(orig_pred - fused_pred))
 print("Overall max difference:", max_diff)
 
+if args.showSummmary:
+    logging.info(model.summary())
+    logging.info(fused_model.summary())
 
 
 
