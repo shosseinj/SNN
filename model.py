@@ -9,13 +9,17 @@ from tensorflow.keras.utils import get_file
 from tensorflow.keras.applications.imagenet_utils import decode_predictions, preprocess_input
 from tensorflow.keras import backend as K
 from tensorflow.keras.optimizers import Adam
+import keras
+from keras.datasets import cifar10
+from keras.models import Sequential
+from keras.layers import Dense, Dropout, Activation, Flatten
+from keras.layers import Conv2D, MaxPooling2D, BatchNormalization
+from keras import optimizers
+import numpy as np
+from keras import backend as K
+from keras import regularizers
 
-# Remove old keras imports completely
-# Old imports such as:
-# from keras.engine.topology import get_source_inputs
-# from keras.utils.layer_utils import convert_all_kernels_in_model
-# from keras.applications.imagenet_utils import _obtain_input_shape
-# are not needed or are already part of tensorflow.keras
+
 
 TH_WEIGHTS_PATH = 'https://github.com/fchollet/deep-learning-models/releases/download/v0.1/vgg16_weights_th_dim_ordering_th_kernels.h5'
 TF_WEIGHTS_PATH = 'https://github.com/fchollet/deep-learning-models/releases/download/v0.1/vgg16_weights_tf_dim_ordering_tf_kernels.h5'
@@ -23,76 +27,220 @@ TH_WEIGHTS_PATH_NO_TOP = 'https://github.com/fchollet/deep-learning-models/relea
 TF_WEIGHTS_PATH_NO_TOP = 'https://github.com/fchollet/deep-learning-models/releases/download/v0.1/vgg16_weights_tf_dim_ordering_tf_kernels_notop.h5'
 
 
-def VGG16(include_top=True, weights='imagenet',
-          input_tensor=None, input_shape=(224, 224, 3),
-          classes=1000):
-    """
-    VGG16 model updated for TensorFlow 2.x
-    """
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Conv2D, BatchNormalization, Dropout, MaxPooling2D, Flatten, Dense
+from tensorflow.keras import regularizers
+from tensorflow.keras.layers import Input, Conv2D, BatchNormalization, Dropout, MaxPooling2D, Flatten, Dense
+from tensorflow.keras.models import Model
+from tensorflow.keras import regularizers
 
-    model = Sequential()
-# Layer 1: Convolutional
-    model.add(Conv2D(input_shape=(224, 224, 3), filters=64, kernel_size=(3, 3),
-                    padding='same', activation='relu'))
-    # Layer 2: Convolutional
-    model.add(Conv2D(filters=64, kernel_size=(3,3), padding='same', activation='relu'))
-    # Layer 3: MaxPooling
-    model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import (Input, Conv2D, BatchNormalization, Activation,
+                                     Dropout, MaxPooling2D, Flatten, Dense)
+from tensorflow.keras import regularizers
 
-    # Layer 4: Convolutional
-    model.add(Conv2D(filters=128, kernel_size=(3,3), padding='same', activation='relu'))
-    # Layer 5: Convolutional
-    model.add(Conv2D(filters=128, kernel_size=(3,3), padding='same', activation='relu'))
-    # Layer 6: MaxPooling
-    model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+def VGG16(input_shape=(32, 32, 3), classes=10, weights_path='weights/cifar10vgg.h5'):
+    weight_decay = 0.0005
+    inputs = Input(shape=input_shape)
 
-    # Layer 7: Convolutional
-    model.add(Conv2D(filters=256, kernel_size=(3,3), padding='same', activation='relu'))
-    # Layer 8: Convolutional
-    model.add(Conv2D(filters=256, kernel_size=(3,3), padding='same', activation='relu'))
-    # Layer 9: Convolutional
-    model.add(Conv2D(filters=256, kernel_size=(3,3), padding='same', activation='relu'))
-    # Layer 10: MaxPooling
-    model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+    # ---------------- Block 1 ----------------
+    x = Conv2D(64, (3, 3), padding='same', activation=None,
+               kernel_regularizer=regularizers.l2(weight_decay))(inputs)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x)
+    x = Dropout(0.3)(x)
 
-    # Layer 11: Convolutional
-    model.add(Conv2D(filters=512, kernel_size=(3,3), padding='same', activation='relu'))
-    # Layer 12: Convolutional
-    model.add(Conv2D(filters=512, kernel_size=(3,3), padding='same', activation='relu'))
-    # Layer 13: Convolutional
-    model.add(Conv2D(filters=512, kernel_size=(3,3), padding='same', activation='relu'))
-    # Layer 14: MaxPooling
-    model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+    x = Conv2D(64, (3, 3), padding='same', activation=None,
+               kernel_regularizer=regularizers.l2(weight_decay))(x)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x)
+    x = MaxPooling2D(pool_size=(2, 2))(x)
 
-    # Layer 15: Convolutional
-    model.add(Conv2D(filters=512, kernel_size=(3,3), padding='same', activation='relu'))
-    # Layer 16: Convolutional
-    model.add(Conv2D(filters=512, kernel_size=(3,3), padding='same', activation='relu'))
-    # Layer 17: Convolutional
-    model.add(Conv2D(filters=512, kernel_size=(3,3), padding='same', activation='relu'))
-    # Layer 18: MaxPooling
-    model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+    # ---------------- Block 2 ----------------
+    x = Conv2D(128, (3, 3), padding='same', activation=None,
+               kernel_regularizer=regularizers.l2(weight_decay))(x)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x)
+    x = Dropout(0.4)(x)
 
-    # Layer 19: Flatten
-    model.add(Flatten())
-    # Layer 20: Fully Connected Layer
-    model.add(Dense(units=4096, activation='relu'))
-    # Layer 21: Fully Connected Layer
-    model.add(Dense(units=4096, activation='relu'))
-    # Layer 22: Softmax Layer
-    model.add(Dense(units=2, activation='softmax'))
+    x = Conv2D(128, (3, 3), padding='same', activation=None,
+               kernel_regularizer=regularizers.l2(weight_decay))(x)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x)
+    x = MaxPooling2D(pool_size=(2, 2))(x)
+
+    # ---------------- Block 3 ----------------
+    x = Conv2D(256, (3, 3), padding='same', activation=None,
+               kernel_regularizer=regularizers.l2(weight_decay))(x)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x)
+    x = Dropout(0.4)(x)
+
+    x = Conv2D(256, (3, 3), padding='same', activation=None,
+               kernel_regularizer=regularizers.l2(weight_decay))(x)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x)
+    x = Dropout(0.4)(x)
+
+    x = Conv2D(256, (3, 3), padding='same', activation=None,
+               kernel_regularizer=regularizers.l2(weight_decay))(x)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x)
+    x = MaxPooling2D(pool_size=(2, 2))(x)
+
+    # ---------------- Block 4 ----------------
+    x = Conv2D(512, (3, 3), padding='same', activation=None,
+               kernel_regularizer=regularizers.l2(weight_decay))(x)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x)
+    x = Dropout(0.4)(x)
+
+    x = Conv2D(512, (3, 3), padding='same', activation=None,
+               kernel_regularizer=regularizers.l2(weight_decay))(x)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x)
+    x = Dropout(0.4)(x)
+
+    x = Conv2D(512, (3, 3), padding='same', activation=None,
+               kernel_regularizer=regularizers.l2(weight_decay))(x)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x)
+    x = MaxPooling2D(pool_size=(2, 2))(x)
+
+    # ---------------- Block 5 ----------------
+    x = Conv2D(512, (3, 3), padding='same', activation=None,
+               kernel_regularizer=regularizers.l2(weight_decay))(x)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x)
+    x = Dropout(0.4)(x)
+
+    x = Conv2D(512, (3, 3), padding='same', activation=None,
+               kernel_regularizer=regularizers.l2(weight_decay))(x)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x)
+    x = Dropout(0.4)(x)
+
+    x = Conv2D(512, (3, 3), padding='same', activation=None,
+               kernel_regularizer=regularizers.l2(weight_decay))(x)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x)
+    x = MaxPooling2D(pool_size=(2, 2))(x)
+    x = Dropout(0.5)(x)
+
+    # ---------------- Classifier ----------------
+    x = Flatten()(x)
+    x = Dense(512, activation=None, kernel_regularizer=regularizers.l2(weight_decay))(x)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x)
+    x = Dropout(0.5)(x)
+    outputs = Dense(classes, activation='softmax')(x)
+
+    model = Model(inputs=inputs, outputs=outputs)
 
 
-    # Load weights if needed
-    # if weights == 'imagenet':
-    #     weights_path = get_file(
-    #         'vgg16_weights_tf_dim_ordering_tf_kernels_notop.h5' if not include_top else
-    #         'vgg16_weights_tf_dim_ordering_tf_kernels.h5',
-    #         TF_WEIGHTS_PATH_NO_TOP if not include_top else TF_WEIGHTS_PATH,
-    #         cache_subdir='models')
-    model.load_weights('weights/cifar10-vgg16_model.h5')
+
+
+    model.load_weights('weights/cifar10vgg.h5')
 
     return model
+
+
+
+# def VGG16(include_top=True, weights='imagenet',
+#           input_tensor=None, input_shape=(224, 224, 3),
+#           classes=1000):
+
+#         model = Sequential()
+#         weight_decay =  0.0005
+
+#         model.add(Conv2D(64, (3, 3), padding='same',
+#                          input_shape=[32,32,3],kernel_regularizer=regularizers.l2(weight_decay)))
+#         model.add(Activation('relu'))
+#         model.add(BatchNormalization())
+#         model.add(Dropout(0.3))
+
+#         model.add(Conv2D(64, (3, 3), padding='same',kernel_regularizer=regularizers.l2(weight_decay)))
+#         model.add(Activation('relu'))
+#         model.add(BatchNormalization())
+
+#         model.add(MaxPooling2D(pool_size=(2, 2)))
+
+#         model.add(Conv2D(128, (3, 3), padding='same',kernel_regularizer=regularizers.l2(weight_decay)))
+#         model.add(Activation('relu'))
+#         model.add(BatchNormalization())
+#         model.add(Dropout(0.4))
+
+#         model.add(Conv2D(128, (3, 3), padding='same',kernel_regularizer=regularizers.l2(weight_decay)))
+#         model.add(Activation('relu'))
+#         model.add(BatchNormalization())
+
+#         model.add(MaxPooling2D(pool_size=(2, 2)))
+
+#         model.add(Conv2D(256, (3, 3), padding='same',kernel_regularizer=regularizers.l2(weight_decay)))
+#         model.add(Activation('relu'))
+#         model.add(BatchNormalization())
+#         model.add(Dropout(0.4))
+
+#         model.add(Conv2D(256, (3, 3), padding='same',kernel_regularizer=regularizers.l2(weight_decay)))
+#         model.add(Activation('relu'))
+#         model.add(BatchNormalization())
+#         model.add(Dropout(0.4))
+
+#         model.add(Conv2D(256, (3, 3), padding='same',kernel_regularizer=regularizers.l2(weight_decay)))
+#         model.add(Activation('relu'))
+#         model.add(BatchNormalization())
+
+#         model.add(MaxPooling2D(pool_size=(2, 2)))
+
+
+#         model.add(Conv2D(512, (3, 3), padding='same',kernel_regularizer=regularizers.l2(weight_decay)))
+#         model.add(Activation('relu'))
+#         model.add(BatchNormalization())
+#         model.add(Dropout(0.4))
+
+#         model.add(Conv2D(512, (3, 3), padding='same',kernel_regularizer=regularizers.l2(weight_decay)))
+#         model.add(Activation('relu'))
+#         model.add(BatchNormalization())
+#         model.add(Dropout(0.4))
+
+#         model.add(Conv2D(512, (3, 3), padding='same',kernel_regularizer=regularizers.l2(weight_decay)))
+#         model.add(Activation('relu'))
+#         model.add(BatchNormalization())
+
+#         model.add(MaxPooling2D(pool_size=(2, 2)))
+
+
+#         model.add(Conv2D(512, (3, 3), padding='same',kernel_regularizer=regularizers.l2(weight_decay)))
+#         model.add(Activation('relu'))
+#         model.add(BatchNormalization())
+#         model.add(Dropout(0.4))
+
+#         model.add(Conv2D(512, (3, 3), padding='same',kernel_regularizer=regularizers.l2(weight_decay)))
+#         model.add(Activation('relu'))
+#         model.add(BatchNormalization())
+#         model.add(Dropout(0.4))
+
+#         model.add(Conv2D(512, (3, 3), padding='same',kernel_regularizer=regularizers.l2(weight_decay)))
+#         model.add(Activation('relu'))
+#         model.add(BatchNormalization())
+
+#         model.add(MaxPooling2D(pool_size=(2, 2)))
+#         model.add(Dropout(0.5))
+
+#         model.add(Flatten())
+#         model.add(Dense(512,kernel_regularizer=regularizers.l2(weight_decay)))
+#         model.add(Activation('relu'))
+#         model.add(BatchNormalization())
+
+#         model.add(Dropout(0.5))
+#         model.add(Dense(10))
+#         model.add(Activation('softmax'))
+  
+
+
+#         model.load_weights('weights/cifar10vgg.h5')
+
+#         return model
 
 
 class SpikingDense(tf.keras.layers.Layer):

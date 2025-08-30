@@ -106,10 +106,7 @@ if 'VGG' in args.model_name:
 #     exit(1)
 
 
-if args.load != 'False':
-    logging.info(f"#### Loading weights =>  weights/{args.load}")
-    model.load_weights('weights/cifar10vgg.h5')
-    # model.load_weights('weights/'+args.load)
+
 
 
 
@@ -117,14 +114,18 @@ if args.load != 'False':
 
 from keras.datasets import cifar10
 
-# model = cifar10vgg()
-
-fused_model = model
-# fused_model = fuse_bn_functional(model)
 
 
-# data.x_test, data.x_train = (data.x_test - data.p)/(data.q-data.p), (data.x_train - data.p)/(data.q-data.p)
-# BN = 'BN' in args.model_name
+# fused_model = model
+fused_model = fuse_bn_functional(model)
+
+
+if args.showSummmary:
+    logging.info(model.summary())
+    # logging.info(fused_model.summary())
+
+
+
 
 
 
@@ -139,80 +140,145 @@ fused_model = model
 # print("Max difference:", np.abs(original_output - fused_output).max())
 
 
-import matplotlib.pyplot as plt
-import numpy as np
-import os
-
-# Ensure output directory exists
-os.makedirs("model_comparison_plots", exist_ok=True)
-
-# CIFAR-10 class names
-class_names = ['airplane', 'automobile', 'bird', 'cat', 'deer', 
-                'dog', 'frog', 'horse', 'ship', 'truck']
 
 
-import matplotlib.pyplot as plt
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 import numpy as np
 from tensorflow.keras.datasets import cifar10
+from tensorflow.keras.models import Model
 
-# Load CIFAR-10 dataset
-index = 2
+# Assuming you already have:
+# model        -> original VGG16 model
+# fused_model  -> fused Conv2D+BN model
+
+# Load CIFAR-10 data
 (x_train, y_train), (x_test, y_test) = cifar10.load_data()
-x_test = x_test.astype('float32')
+x_test = x_test.astype('float32') / 255.0  # normalize
 
-# Extract a single image and its label
-test_image = x_test[index]
-true_label = y_test[index][0]
+# Take a sample or use full test set
+x_sample = x_test[:10]  # first 10 images
 
-# Prepare image for prediction
-test_image_batch = np.expand_dims(test_image, axis=0)
-predicted_prob = model.predict(test_image_batch)
-predicted_class = np.argmax(predicted_prob)
+# Get predictions
+orig_pred = model.predict(x_sample)
+fused_pred = fused_model.predict(x_sample)
 
-# Create subplots
-fig, axes = plt.subplots(1, 2, figsize=(8, 4))
+# Compare predictions
+for i in range(len(x_sample)):
+    print(f"Sample {i}:")
+    print("Original prediction:", np.round(orig_pred[i], 4))
+    print("Fused prediction:   ", np.round(fused_pred[i], 4))
+    print("Max difference:     ", np.max(np.abs(orig_pred[i] - fused_pred[i])))
+    print("Predicted class orig:", np.argmax(orig_pred[i]))
+    print("Predicted class fused:", np.argmax(fused_pred[i]))
+    print("-" * 40)
 
-# Plot the original image with true label
-axes[0].imshow(test_image.astype('uint8'))
-axes[0].set_title(f"True Label: {true_label}")
-axes[0].axis('off')
-
-# Plot the image with predicted class and true label
-axes[1].imshow(test_image.astype('uint8'))
-axes[1].set_title(f"Predicted: {predicted_class} | True: {true_label}")
-axes[1].axis('off')
-
-plt.tight_layout()
-plt.show()
-
-# Save image
+# Optional: compute overall max difference for all samples
+max_diff = np.max(np.abs(orig_pred - fused_pred))
+print("Overall max difference:", max_diff)
 
 
-# # Prepare image for model input
-# test_input = (img - data.p) / (data.q - data.p)
-# test_input = np.expand_dims(test_input, axis=0)
 
-# # Get predictions
-# orig_pred = model(test_input, training=False).numpy().flatten()
-# fused_pred = fused_model(test_input, training=False).numpy().flatten()
 
-# # Save bar chart
-# x = np.arange(len(class_names))
-# width = 0.35
-# plt.figure(figsize=(8, 4))
-# plt.bar(x - width/2, orig_pred, width, label='Original')
-# plt.bar(x + width/2, fused_pred, width, label='Fused')
-# plt.xticks(x, class_names, rotation=45)
-# plt.ylabel('Probability')
-# plt.legend()
+
+
+
+
+
+# import matplotlib.pyplot as plt
+# import numpy as np
+# import os
+
+# # Ensure output directory exists
+# os.makedirs("model_comparison_plots", exist_ok=True)
+
+# # CIFAR-10 class names
+# class_names = ['airplane', 'automobile', 'bird', 'cat', 'deer', 
+#                 'dog', 'frog', 'horse', 'ship', 'truck']
+
+
+# import matplotlib.pyplot as plt
+# import numpy as np
+# from tensorflow.keras.datasets import cifar10
+
+# # Load CIFAR-10 dataset
+# index = 2
+# (x_train, y_train), (x_test, y_test) = cifar10.load_data()
+# x_test = x_test.astype('float32')
+
+# # Extract a single image and its label
+# test_image = x_test[index]
+# true_label = y_test[index][0]
+
+# # Prepare image for prediction
+# test_image_batch = np.expand_dims(test_image, axis=0)
+# predicted_prob = fused_model.predict(test_image_batch)
+# predicted_class = np.argmax(predicted_prob)
+
+# # Create subplots
+# fig, axes = plt.subplots(1, 2, figsize=(8, 4))
+
+# # Plot the original image with true label
+# axes[0].imshow(test_image.astype('uint8'))
+# axes[0].set_title(f"True Label: {true_label}")
+# axes[0].axis('off')
+
+# # Plot the image with predicted class and true label
+# axes[1].imshow(test_image.astype('uint8'))
+# axes[1].set_title(f"Predicted: {predicted_class} | True: {true_label}")
+# axes[1].axis('off')
+
 # plt.tight_layout()
-# plt.savefig(f"model_comparison_plots/prediction_comparison_{idx}.png")
-# plt.close()
+# plt.show()
 
-print(f"Saved image and prediction chart for test index  in 'model_comparison_plots/'")
-
+# # Save image
 
 
+# # # Prepare image for model input
+# # test_input = (img - data.p) / (data.q - data.p)
+# # test_input = np.expand_dims(test_input, axis=0)
+
+# # # Get predictions
+# # orig_pred = model(test_input, training=False).numpy().flatten()
+# # fused_pred = fused_model(test_input, training=False).numpy().flatten()
+
+# # # Save bar chart
+# # x = np.arange(len(class_names))
+# # width = 0.35
+# # plt.figure(figsize=(8, 4))
+# # plt.bar(x - width/2, orig_pred, width, label='Original')
+# # plt.bar(x + width/2, fused_pred, width, label='Fused')
+# # plt.xticks(x, class_names, rotation=45)
+# # plt.ylabel('Probability')
+# # plt.legend()
+# # plt.tight_layout()
+# # plt.savefig(f"model_comparison_plots/prediction_comparison_{idx}.png")
+# # plt.close()
+
+# print(f"Saved image and prediction chart for test index  in 'model_comparison_plots/'")
 
 
 
@@ -220,9 +286,7 @@ print(f"Saved image and prediction chart for test index  in 'model_comparison_pl
 
 
 
-if args.showSummmary:
-    logging.info(model.summary())
-    logging.info(fused_model.summary())
+
 
 
 

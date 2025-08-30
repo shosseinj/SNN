@@ -113,31 +113,12 @@ if 'VGG' in args.model_name:
         model = create_vgg_model_SNN(layers2D, kernel_size, layers1D, data, optimizer, robustness_params=robustness_params,
                                      kernel_regularizer=regularizer, kernel_initializer=initializer)
     if 'ReLU' in args.model_type:
-        model = create_vgg_model_ReLU (layers2D, kernel_size, layers1D, data, BN=BN, optimizer=optimizer,
-                                       kernel_regularizer=regularizer, kernel_initializer=initializer)
-if model is None:
-    print('Please specify a valid model. Exiting.')
-    exit(1)
-# model.summary()
-# model.summary()
+        # model = create_vgg_model_ReLU (layers2D, kernel_size, layers1D, data, BN=BN, optimizer=optimizer,
+        #                                kernel_regularizer=regularizer, kernel_initializer=initializer)
+        model= VGG16()
+
 model.last_dense = list(filter(lambda x : 'dense' in x.name, model.layers))[-1]
 
-if args.load != 'False':
-    logging.info("#### Loading weights ####")
-    if 'ReLU' in args.model_type:
-        # Load weights
-        if args.load :  # automatic name
-            print('path=', args.logging_dir +'/'+args.load)
-            # model.load_weights('weights/'+args.load)
-        # else:  # custom name
-        #     model.load_weights(args.logging_dir + args.load, by_name=True)
-    if 'SNN' in args.model_type:
-        # Load X ranges
-        #if os.path.exists(args.logging_dir + args.model_name + '_X_n.pkl'):
-        X_n=pkl.load(open(args.logging_dir + args.model_name + '_X_n.pkl', 'rb'))
-        # else:
-        #     X_n=1000
-        model.load_weights(args.logging_dir + args.model_name + '_preprocessed.h5', by_name=True)
 
 if 'SNN' in args.model_type:
     logging.info("#### Setting SNN intervals ####")
@@ -149,49 +130,20 @@ if 'SNN' in args.model_type:
 
 
 
-logging.info("#### Training ####")
 
 
-save_callback = SaveWeightsEveryNEpochs(save_path=args.logging_dir, n=1)
-
-history = model.fit(
-    data.x_train, data.y_train,
-    batch_size=args.batch_size,
-    epochs=args.epochs,
-    verbose=1,
-    validation_data=(data.x_test, data.y_test),
-    callbacks=[save_callback]
-)
-
-
-if args.testing and args.epochs > 0:
-    # Obtain accuracy of the fine-tuned SNN model.
-    logging.info("#### Final test set accuracy testing ####")
-    test_acc = model.evaluate(data.x_test, data.y_test, batch_size=args.batch_size)
-    logging.info("Final testing accuracy is {}.".format(test_acc))
 
 if args.save and 'ReLU' in args.model_type:
     # logging.info("#### Saving ReLU model ####")
  
     # model.save_weights(args.logging_dir + '/newTrain.weights.h5')
     fused_model = fuse_bn_functional(model)
-    if args.testing:
-      logging.info("#### Initial test set accuracy testing ####")
-      test_model_acc = model.evaluate(data.x_test, data.y_test, batch_size=args.batch_size)
-      test_fused_model_acc = fused_model.evaluate(data.x_test, data.y_test, batch_size=args.batch_size)
-      logging.info("Initial testing model accuracy is {}.".format(test_model_acc))
-      logging.info("Initial testing fused_model accuracy is {}.".format(test_fused_model_acc))
+
       
     logging.info('fuse (imaginary) BN layers')
 
-    data.x_test, data.x_train = (data.x_test - data.p)/(data.q-data.p), (data.x_train - data.p)/(data.q-data.p)
-    BN = 'BN' in args.model_name
-  
     
  
-    test_input = (data.x_test[0:1] - data.p) / (data.q - data.p)
-    original_output = model(test_input, training=False).numpy()
-    fused_output    = fused_model(test_input, training=False).numpy()
 
 
 

@@ -1,1 +1,3 @@
 INFO:root:#### Creating the model ####
+DEBUG:h5py._conv:Creating converter from 3 to 5
+INFO:root:None

@@ -83,18 +83,21 @@ def fuse_bn_functional(model):
 
     def fuse_conv_bn(conv_layer, bn_layer):
         """Compute fused Conv2D weights and bias"""
-        W = conv_layer.get_weights()[0]   # (kh, kw, in_ch, out_ch)
-        b = conv_layer.get_weights()[1] if len(conv_layer.get_weights()) > 1 else np.zeros(conv_layer.filters)
+        W = conv_layer.get_weights()[0].astype(np.float32)  # (kh, kw, in_ch, out_ch)
+        if len(conv_layer.get_weights()) > 1:
+            b = conv_layer.get_weights()[1].astype(np.float32)
+        else:
+            b = np.zeros(conv_layer.filters, dtype=np.float32)
 
-        gamma = bn_layer.gamma.numpy()
-        beta = bn_layer.beta.numpy()
+        gamma = bn_layer.gamma.numpy() if bn_layer.scale else np.ones(conv_layer.filters, dtype=np.float32)
+        beta = bn_layer.beta.numpy() if bn_layer.center else np.zeros(conv_layer.filters, dtype=np.float32)
         mean = bn_layer.moving_mean.numpy()
         var = bn_layer.moving_variance.numpy()
         epsilon = bn_layer.epsilon
 
-        scale = gamma / np.sqrt(var + epsilon)   # shape (out_ch,)
-        W_fused = W * scale.reshape((1, 1, 1, -1))  # broadcast on out_ch
-        b_fused = (b - mean) * scale + beta
+        scale = gamma / np.sqrt(var + epsilon)
+        W_fused = W * scale.reshape((1, 1, 1, -1))
+        b_fused = beta + (b - mean) * scale
         return W_fused, b_fused
 
 
@@ -105,15 +108,17 @@ def fuse_bn_functional(model):
     for layer in model.layers[1:]:
         inbound_tensors = []
         inbound_names = []
+        seen = set()  # track seen layers
 
-        # Collect inputs for this layer
         for node in layer._inbound_nodes:
             for inbound_tensor in node.input_tensors:
                 inbound_layer, _, _ = inbound_tensor._keras_history
                 inbound_layer_name = inbound_layer.name
-                if inbound_layer_name in layer_outputs:
+                if inbound_layer_name in layer_outputs and inbound_layer_name not in seen:
                     inbound_tensors.append(layer_outputs[inbound_layer_name])
                     inbound_names.append(inbound_layer_name)
+                    seen.add(inbound_layer_name)
+
 
         if not inbound_tensors:
             raise ValueError(f"No inbound tensors found for layer {layer.name}")
@@ -132,23 +137,35 @@ def fuse_bn_functional(model):
                 act_name = conv_config.get("activation", None)
                 conv_config["activation"] = None
 
+                # Correct input channels
+                # Use the output tensor of the previous Conv2D, not just layer_inputs
+                prev_output = layer_inputs[prev_layer.name]  # this has correct number of channels
+                input_channels = prev_output.shape[-1]
+                prev_height = layer_inputs[prev_layer.name].shape[1]
+                prev_width = layer_inputs[prev_layer.name].shape[2]
                 fused_conv = tf.keras.layers.Conv2D(
-                        filters=prev_layer.filters,
-                        kernel_size=prev_layer.kernel_size,
-                        strides=prev_layer.strides,
-                        padding=prev_layer.padding,
-                        dilation_rate=prev_layer.dilation_rate,
-                        use_bias=True,
-                        kernel_initializer='zeros',
-                        bias_initializer='zeros',
-                        name=prev_layer.name + "_fused"
-                    )
-                x_fused = fused_conv( layer_inputs[prev_layer.name])
-                    
+                    filters=prev_layer.filters,
+                    kernel_size=prev_layer.kernel_size,
+                    strides=prev_layer.strides,
+                    padding=prev_layer.padding,
+                    dilation_rate=prev_layer.dilation_rate,
+                    use_bias=True,
+                    kernel_initializer='zeros',
+                    bias_initializer='zeros',
+                    name=prev_layer.name + "_fused",
+                    input_shape=(prev_height, prev_width, input_channels)  
+                )
+                x_fused = fused_conv(prev_output)
+
 
                 # Fuse weights
+                # Clone Conv2D layer config
                 W_fused, b_fused = fuse_conv_bn(prev_layer, layer)
                 fused_conv.set_weights([W_fused, b_fused])
+
+
+                # W_fused, b_fused = fuse_conv_bn(prev_layer, layer)
+                # fused_conv.set_weights([W_fused, b_fused])
 
                 # Re-apply activation if needed
                 if act_name and act_name != "linear":
@@ -159,6 +176,10 @@ def fuse_bn_functional(model):
 
         # ---- Default: clone layer ----
         new_layer = layer.__class__.from_config(layer.get_config())
+# If x_in is a list/tuple of length 1, unpack it
+        if isinstance(x_in, (list, tuple)) and len(x_in) == 1:
+            x_in = x_in[0]
+
         x_out = new_layer(x_in)
         if layer.get_weights():
             new_layer.set_weights(layer.get_weights())
@@ -166,7 +187,6 @@ def fuse_bn_functional(model):
 
     outputs = layer_outputs[model.layers[-1].name]
     return Model(inputs, outputs)
-
 
 def verify_model_fusion(original_model, fused_model, test_input=None):
     """Thorough verification of model fusion"""
