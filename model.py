@@ -206,7 +206,7 @@ class SpikingDense(tf.keras.layers.Layer):
     
 class SpikingConv2D(tf.keras.layers.Layer):
     def __init__(self, filters, name, X_n=1, padding='same', kernel_size=(3,3), robustness_params={},
-                 kernel_regularizer=None, kernel_initializer=None):
+                 kernel_regularizer=None, kernel_initializer=None,  noise=0):
         self.filters=filters
         self.kernel_size=kernel_size
         self.padding=padding
@@ -214,7 +214,8 @@ class SpikingConv2D(tf.keras.layers.Layer):
         self.initializer = kernel_initializer
         self.B_n = (1 + 0.5) * X_n
         self.t_min_prev, self.t_min, self.t_max=0, 0, 1
-        self.robustness_params=robustness_params['time_bits']
+        self.robustness_params=robustness_params
+        self.noise = noise
         self.alpha = tf.cast(tf.fill((filters, ), 1), dtype=tf.float64)
         super(SpikingConv2D, self).__init__(name=name)
     
@@ -222,12 +223,13 @@ class SpikingConv2D(tf.keras.layers.Layer):
         self.kernel = self.add_weight(shape=(self.kernel_size[0], self.kernel_size[1], input_dim[-1], self.filters),
                       name='kernel', regularizer=self.regularizer, initializer=self.initializer)
         # Depending on whether there is fusion with batch normalization layer and its position with respect to ReLU activation function the processing in spiking convolutional layer can be different.
-        self.BN=tf.Variable(tf.constant([0]), name='BN', trainable=False)
-        self.BN_before_ReLU=tf.Variable(tf.constant([0]), name='BN_before_ReLU', trainable=False)
+        # self.BN=tf.Variable(tf.constant([0]), name='BN', trainable=False)
+        # self.BN_before_ReLU=tf.Variable(tf.constant([0]), name='BN_before_ReLU', trainable=False)
         # When fusing a batch normalization layer with the next convolutional layer where padding=='same', some of the biases in scaled ReLU network are changed, leading to 9 different values.
         self.D_i = self.add_weight(shape=(9, self.filters), initializer=tf.constant_initializer(0), name='D_i')
         self.built = True
-    
+        self.BN = 0 #by hoss
+        self.BN_before_ReLU = 0
     def set_params(self, t_min_prev, t_min):
         """
         Set t_min_prev, t_min, t_max, J_ij (kernel) and vartheta_i (threshold) parameters of this layer. Alpha is fixed at 1.
@@ -237,6 +239,53 @@ class SpikingConv2D(tf.keras.layers.Layer):
         self.t_max=tf.Variable(tf.constant(t_min+self.B_n, dtype=tf.float64), trainable=False, name='t_max')
         return t_min, t_min+self.B_n
 
+    # def call(self, tj):
+    #     """
+    #     Input spiking times tj, output spiking times ti. 
+    #     """
+    #     # Image size in case of padding='same' or padding='valid'.
+    #     padding_size, image_same_size = int(self.padding=='same')*(self.kernel_size[0]//2), tf.shape(tj)[1] 
+    #     image_valid_size = image_same_size - self.kernel_size[0]+1
+    #     # Pad input with t_min value, which is equivalent with 0 in ReLU network.
+    #     tj=tf.pad(tj, tf.constant([[0, 0], [padding_size, padding_size,], [padding_size, padding_size], [0, 0]]), constant_values=self.t_min)
+    #     # Extract image patches of size (kernel_size, kernel_size). call_spiking function will be called for different patches in parallel.  
+    #     tj = tf.image.extract_patches(tj, sizes=[1, self.kernel_size[0], self.kernel_size[1], 1], strides=[1, 1, 1, 1], rates=[1, 1, 1, 1], padding='VALID')
+    #     # We reshape input and weights in order to utilize the same function as for the fully-connected layer.
+    #     W = tf.reshape(self.kernel, (-1, self.filters))
+    #     if self.padding=='valid' or self.BN!=1 or self.BN_before_ReLU==1: 
+    #         # In this case the threshold is the same for whole input image.
+    #         tj = tf.reshape(tj, (-1, tf.shape(W)[0]))
+    #         ti = call_spiking(tj, W, self.D_i[0], self.t_min_prev, self.t_min, self.t_max)
+    #         # Layer output is reshaped back.
+    #         if self.padding=='valid':
+    #             ti = tf.reshape(ti, (-1, image_valid_size, image_valid_size, self.filters))
+    #         else:
+    #             ti = tf.reshape(ti, (-1, image_same_size, image_same_size, self.filters))
+    #     else:
+    #         # In this case there are 9 different thresholds for 9 different image partitions.
+    #         tj_partitioned = [tj[:, 1:-1, 1:-1, :], tj[:, :1, :1, :], tj[:, :1, 1:-1, :], tj[:, :1, -1:, :], tj[:, 1:-1, -1:, :], tj[:, -1:, -1:, :] , tj[:, -1:, 1:-1, :], tj[:, -1:, :1, :], tj[:, 1:-1, :1, :]]
+    #         ti_partitioned=[]
+    #         for i, tj_part in enumerate(tj_partitioned):
+    #             # Iterate over 9 different partitions and call call_spiking with different threshold value.
+    #             tj_part = tf.reshape(tj_part, (-1, tf.shape(W)[0]))
+    #             ti_part = call_spiking(tj_part, W, self.D_i[i], self.t_min_prev, self.t_min, self.t_max, noise=self.noise)
+    #             # Partitions are reshaped back.
+    #             if i==0: ti_part=tf.reshape(ti_part, (-1, image_valid_size, image_valid_size, self.filters))
+    #             if i in [1, 3, 5, 7]: ti_part=tf.reshape(ti_part, (-1, 1, 1, self.filters))
+    #             if i in [2, 6]: ti_part=tf.reshape(ti_part, (-1, 1, image_valid_size, self.filters))
+    #             if i in [4, 8]: ti_part=tf.reshape(ti_part, (-1, image_valid_size, 1, self.filters))
+    #             ti_partitioned.append(ti_part) 
+    #         # Partitions are concatenated to create a complete output.
+    #         if image_valid_size!=0:
+    #             ti_top_row = tf.concat([ti_partitioned[1], ti_partitioned[2], ti_partitioned[3]], axis=2)
+    #             ti_middle = tf.concat([ti_partitioned[8], ti_partitioned[0], ti_partitioned[4]], axis=2)
+    #             ti_bottom_row = tf.concat([ti_partitioned[7], ti_partitioned[6], ti_partitioned[5]], axis=2)
+    #             ti = tf.concat([ti_top_row, ti_middle, ti_bottom_row], axis=1)         
+    #         else:
+    #             ti_top_row = tf.concat([ti_partitioned[1], ti_partitioned[3]], axis=2)
+    #             ti_bottom_row = tf.concat([ti_partitioned[7], ti_partitioned[5]], axis=2)
+    #             ti = tf.concat([ti_top_row, ti_bottom_row], axis=1)   
+    #     return ti
     def call(self, tj):
         """
         Input spiking times tj, output spiking times ti. 
@@ -253,7 +302,8 @@ class SpikingConv2D(tf.keras.layers.Layer):
         if self.padding=='valid' or self.BN!=1 or self.BN_before_ReLU==1: 
             # In this case the threshold is the same for whole input image.
             tj = tf.reshape(tj, (-1, tf.shape(W)[0]))
-            ti = call_spiking(tj, W, self.D_i[0], self.t_min_prev, self.t_min, self.t_max, noise=self.noise)
+            # FIX: Add robustness_params parameter
+            ti = call_spiking(tj, W, self.D_i[0], self.t_min_prev, self.t_min, self.t_max, self.robustness_params)
             # Layer output is reshaped back.
             if self.padding=='valid':
                 ti = tf.reshape(ti, (-1, image_valid_size, image_valid_size, self.filters))
@@ -266,7 +316,8 @@ class SpikingConv2D(tf.keras.layers.Layer):
             for i, tj_part in enumerate(tj_partitioned):
                 # Iterate over 9 different partitions and call call_spiking with different threshold value.
                 tj_part = tf.reshape(tj_part, (-1, tf.shape(W)[0]))
-                ti_part = call_spiking(tj_part, W, self.D_i[i], self.t_min_prev, self.t_min, self.t_max, noise=self.noise)
+                # FIX: Add robustness_params parameter
+                ti_part = call_spiking(tj_part, W, self.D_i[i], self.t_min_prev, self.t_min, self.t_max, self.robustness_params, noise=self.noise)
                 # Partitions are reshaped back.
                 if i==0: ti_part=tf.reshape(ti_part, (-1, image_valid_size, image_valid_size, self.filters))
                 if i in [1, 3, 5, 7]: ti_part=tf.reshape(ti_part, (-1, 1, 1, self.filters))
@@ -284,7 +335,6 @@ class SpikingConv2D(tf.keras.layers.Layer):
                 ti_bottom_row = tf.concat([ti_partitioned[7], ti_partitioned[5]], axis=2)
                 ti = tf.concat([ti_top_row, ti_bottom_row], axis=1)   
         return ti
-
 
 class ModelTmax(tf.keras.Model):
     def __init__(self, **kwargs):
