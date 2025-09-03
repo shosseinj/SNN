@@ -1,0 +1,3 @@
+INFO:root:#### Creating the model ####
+WARNING:tensorflow:From i:\SNN\drive-download-20250810T143457Z-1-001\myvenv1\Lib\site-packages\keras\src\backend\tensorflow\core.py:232: The name tf.placeholder is deprecated. Please use tf.compat.v1.placeholder instead.
+
