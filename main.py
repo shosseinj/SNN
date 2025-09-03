@@ -55,7 +55,7 @@ parser.add_argument('--testing', type=strtobool, default=False, help='Execute te
 parser.add_argument('--load', type=str, default='False', help='Load before training. (True|False|custom_name.h5)')
 parser.add_argument('--save', type=strtobool, default=False, help='Store after training.')
 # Robustness parameters:fused_model
-parser.add_argument('--findMax', type=strtobool, default=False, help='Store after training.')
+parser.add_argument('--findMax', type=strtobool, default=True, help='Store after training.')
 # Robustness parameters:fused_model
 
 parser.add_argument('--noise', type=float, default=0.0, help='Noise std.dev.')
@@ -113,8 +113,6 @@ if 'VGG' in args.model_name:
         model = create_vgg_model_SNN(layers2D, kernel_size, layers1D, data, optimizer, robustness_params=robustness_params,
                                      kernel_regularizer=regularizer, kernel_initializer=initializer)
     if 'ReLU' in args.model_type:
-        # model = create_vgg_model_ReLU (layers2D, kernel_size, layers1D, data, BN=BN, optimizer=optimizer,
-        #                                kernel_regularizer=regularizer, kernel_initializer=initializer)
         model= VGG16()
 
 model.last_dense = list(filter(lambda x : 'dense' in x.name, model.layers))[-1]
@@ -143,13 +141,26 @@ if args.save and 'ReLU' in args.model_type:
     logging.info('fuse (imaginary) BN layers')
 
     
- 
+    import numpy as np
+    from tensorflow.keras.datasets import cifar10
+    from tensorflow.keras.models import Model
+
+    (x_train, y_train), (x_test, y_test) = cifar10.load_data()
+    x_test = x_test.astype('float32') / 255.0  # normalize
+
+    # Take a sample or use full test set
+    x_sample = x_test[:10]  # first 10 images
+
+    # Get predictions
+    orig_pred = model.predict(x_sample)
+    fused_pred = fused_model.predict(x_sample)
 
 
 
-    print("Original model output:", original_output)
-    print("Fused model output:", fused_output)
-    print("Max difference:", np.abs(original_output - fused_output).max())
+
+    print("Original model output:", orig_pred)
+    print("Fused model output:", fused_pred)
+    print("Max difference:", np.abs(orig_pred - fused_pred).max())
 
 
     # import matplotlib.pyplot as plt
@@ -224,32 +235,44 @@ if args.save and 'ReLU' in args.model_type:
     # Check if outputs are close
     # print("Outputs close?", np.allclose(output_original, output_fused, atol=1e-6))
     # 2. Save preprocessed ReLU model.
-    model.save_weights('weights/' + args.model_name + '_orginal.weights.h5')
-    fused_model.save_weights('weights/' + args.model_name + '_fused_model.weights.h5')
-    logging.info('saved preprocessed ReLU model')
+    # model.save_weights('weights/' + args.model_name + '_orginal.weights.h5')
+    # fused_model.save_weights('weights/' + args.model_name + '_fused_model.weights.h5')
+    # logging.info('saved preprocessed ReLU model')
 
 
     if args.findMax:
-      # 3. Find maximum layer outputs.
-      logging.info('calculating maximum layer output...')
-      layer_num, X_n = 0, []
-      layers_max = []
-      for k, layer in enumerate(model.layers):
-          if 'conv' in layer.name or 'dense' in layer.name:
-              if k != len(model.layers) - 2:
-                  # Apply ReLU first
-                  relu_output = ReLU()(layer.output)
-                  
-                  # Wrap tf.reduce_max in a Lambda layer
-                  max_output = Lambda(lambda x: tf.reduce_max(x))(relu_output)
-                  
-                  layers_max.append(max_output)
+   
+   
+        from tensorflow.keras.layers import Lambda
 
-      extractor = tf.keras.Model(inputs=model.inputs, outputs=layers_max)
-      output = extractor.predict(data.x_train, batch_size=64, verbose=1)
-      X_n = list(map(lambda x: np.max(x), output))
-      logging.info('X_n: %s', X_n)
-      pkl.dump(X_n, open(args.logging_dir + '/' + args.model_name + '_X_n.pkl', 'wb'))
-      logging.info('saved maximum layer output')
+        logging.info('calculating maximum layer output...')
+        layers_max = []
+        for k, layer in enumerate(model.layers):
+            if 'conv' in layer.name or 'dense' in layer.name:
+                if k != len(model.layers) - 2:
+                    # Wrap your operation in a Lambda layer
+                    relu_max_layer = Lambda(lambda x: tf.reduce_max(tf.nn.relu(x)))(layer.output)
+                    layers_max.append(relu_max_layer)
+
+        extractor = tf.keras.Model(inputs=model.inputs, outputs=layers_max)
+        output = extractor.predict(data.x_train, batch_size=64, verbose=1)
+        X_n = list(map(lambda x: np.max(x), output))
+
+
+
+
+        # layer_num, X_n = 0, []
+        # layers_max = []
+        # for k, layer in enumerate(model.layers):
+        #     if 'conv' in layer.name or 'dense' in layer.name:
+        #         if k!=len(model.layers)-2:
+        #             # Calculate X_n of the current layer.
+        #             layers_max.append(tf.reduce_max(tf.nn.relu(layer.output)))
+
+        logging.info('X_n: %s', X_n)
+        pkl.dump(X_n, open( 'weights/RELU_X_n.pkl', 'wb'))
+        logging.info('saved maximum layer output')
+
+
 
 print('### Total elapsed time [s]:', time.time() - start_time)
