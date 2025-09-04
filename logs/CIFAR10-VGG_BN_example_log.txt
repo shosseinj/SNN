@@ -1,0 +1,10 @@
+INFO:root:#### Creating the model ####
+WARNING:tensorflow:From i:\SNN\drive-download-20250810T143457Z-1-001\myvenv1\Lib\site-packages\keras\src\backend\tensorflow\core.py:232: The name tf.placeholder is deprecated. Please use tf.compat.v1.placeholder instead.
+
+INFO:root:#### Setting SNN intervals ####
+INFO:root:None
+INFO:root:#### Training ####
+INFO:root:Test Accuracy: 0.0002, Test Loss: 0.0002
+INFO:root:Predicted labels for sample: [7 7 7 7 7 7 7 7 7 7]
+WARNING:absl:You are saving your model as an HDF5 file via `model.save()` or `keras.saving.save_model(model)`. This file format is considered legacy. We recommend using instead the native Keras format, e.g. `model.save('my_model.keras')` or `keras.saving.save_model(model, 'my_model.keras')`. 
+DEBUG:h5py._conv:Creating converter from 5 to 3
