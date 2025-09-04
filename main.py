@@ -19,6 +19,9 @@ from tensorflow.keras.layers import Conv2D, Input, Dense, MaxPool2D, Flatten, Dr
 from tensorflow.keras.models import Model
 import os
 from tensorflow.keras.callbacks import Callback
+from tensorflow.keras.callbacks import TensorBoard
+import datetime
+
 
 class SaveWeightsEveryNEpochs(Callback):
     def __init__(self, save_path, n=10):
@@ -50,8 +53,9 @@ parser.add_argument('--model_type', type=str, default='SNN', help='(SNN|ReLU)')
 parser.add_argument('--model_name', type=str, default='BN', help='Should contain (FC2|VGG[BN]): e.g. VGG_BN_test1')
 parser.add_argument('--lr', type=float, default=0.0005, help='Learning rate')
 parser.add_argument('--batch_size', type=int, default=256, help='Batch size')
-parser.add_argument('--epochs', type=int, default=100, help='Epochs. 0 -skip training')
+parser.add_argument('--epochs', type=int, default=10, help='Epochs. 0 -skip training')
 parser.add_argument('--testing', type=strtobool, default=False, help='Execute testing.')
+parser.add_argument('--training', type=strtobool, default=True, help='Execute testing.')
 parser.add_argument('--load', type=str, default='False', help='Load before training. (True|False|custom_name.h5)')
 parser.add_argument('--save', type=strtobool, default=False, help='Store after training.')
 # Robustness parameters:fused_model
@@ -69,6 +73,12 @@ if(len(args[1])>0):
 args = args[0]
 args.model_name = args.data_name + '-' + args.model_name
 set_up_logging(args.logging_dir, args.model_name)
+
+log_dir = "logs/snn_vgg16/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+tensorboard_cb = TensorBoard(log_dir=log_dir, histogram_freq=1, write_graph=True)
+
+
+
 robustness_params={
     'noise':args.noise,
     'time_bits':args.time_bits,
@@ -131,7 +141,83 @@ if 'SNN' in args.model_type:
 
 
 
-if args.save and 'ReLU' in args.model_type:
+
+
+
+
+
+
+
+if args.training:
+    import logging
+    import tensorflow as tf
+    from tensorflow.keras.datasets import cifar10
+
+    logging.info(model.summary())
+
+    logging.info("#### Training ####")
+
+    # 1. Load CIFAR-10 Dataset
+    (x_train, y_train), (x_test, y_test) = cifar10.load_data()
+
+    # 2. Normalize data to [0,1]
+    x_train = x_train.astype('float32') / 255.0
+    x_test = x_test.astype('float32') / 255.0
+
+    # 3. Convert labels to one-hot encoding
+    num_classes = 10
+    y_train = tf.keras.utils.to_categorical(y_train, num_classes)
+    y_test = tf.keras.utils.to_categorical(y_test, num_classes)
+
+    # 4. Optional: Take a small sample for quick debugging
+    x_sample = x_test[:10]
+
+    # 5. Compile the model
+ # Define a dummy loss function for the second output
+    dummy_loss = lambda y_true, y_pred: 0.0
+
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(),
+        loss=[tf.keras.losses.CategoricalCrossentropy(from_logits=True), dummy_loss],
+        loss_weights=[1.0, 0.0],  # only first output affects training
+        metrics=['accuracy']
+    )
+
+
+    import numpy as np
+
+    dummy_train = np.zeros((x_train.shape[0], 1))
+    dummy_test = np.zeros((x_test.shape[0], 1))
+
+    history = model.fit(
+        x_train, [y_train, dummy_train],
+        batch_size=args.batch_size,
+        epochs=args.epochs,
+        verbose=1,
+        validation_data=(x_test, [y_test, dummy_test]),
+            callbacks=[tensorboard_cb]  # <--- add this
+
+    )
+
+    # 7. Evaluate the model
+    test_loss, test_acc, *_ = model.evaluate(
+        x_test, [y_test, dummy_test], verbose=1
+    )
+    logging.info(f"Test Accuracy: {test_acc:.4f}, Test Loss: {test_loss:.4f}")
+
+    # 8. Make predictions on test sample
+    preds, min_activations = model.predict(x_sample)
+    predicted_labels = tf.argmax(tf.nn.softmax(preds), axis=1).numpy()
+    logging.info(f"Predicted labels for sample: {predicted_labels}")
+
+    # 9. Save the trained model
+    model.save("weights/spiking_vgg_snn.h5")
+    logging.info("Model saved to spiking_vgg_snn.h5")
+
+
+
+
+if (args.save and 'ReLU' in args.model_type) and not(args.training):
     # logging.info("#### Saving ReLU model ####")
  
     # model.save_weights(args.logging_dir + '/newTrain.weights.h5')

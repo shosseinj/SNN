@@ -313,9 +313,19 @@ class ModelTmax(tf.keras.Model):
     
     def test_step(self, data):
         x, y_all = data
-        y_pred_all = self(x, training=False)  
-        self.compiled_loss(y_all, y_pred_all[0], regularization_losses=self.losses)
-        self.compiled_metrics.update_state(y_all, y_pred_all[0])
+        y_pred_all = self(x, training=False) 
+
+
+    # Use only the real labels for loss/metrics
+        y_true = y_all[0]
+        y_pred = y_pred_all[0]
+
+
+        self.compiled_loss(y_true, y_pred, regularization_losses=self.losses)
+        self.compiled_metrics.update_state(y_true, y_pred)
+
+        # self.compiled_loss(y_all, y_pred_all[0], regularization_losses=self.losses)
+        # self.compiled_metrics.update_state(y_all, y_pred_all[0])
         return {m.name: m.result() for m in self.metrics}
 
 
@@ -371,7 +381,8 @@ def create_vgg_model_SNN(layers2D, kernel_size, layers1D, data, optimizer, X_n=1
                           kernel_regularizer=kernel_regularizer,
                           robustness_params=robustness_params)(ti)
     model = ModelTmax (inputs=tj, outputs=[outputs, min_ti])  
-    model.compile(metrics=['accuracy'], loss=tf.keras.losses.CategoricalCrossentropy(from_logits=True), optimizer=optimizer)
+    # model.compile(metrics=['accuracy'], loss=tf.keras.losses.CategoricalCrossentropy(from_logits=True), optimizer=optimizer)
+    # print('finish')
     return model
 
 
