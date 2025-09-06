@@ -74,9 +74,17 @@ args = args[0]
 args.model_name = args.data_name + '-' + args.model_name
 set_up_logging(args.logging_dir, args.model_name)
 
-log_dir = "logs/snn_vgg16/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-tensorboard_cb = TensorBoard(log_dir=log_dir, histogram_freq=1, write_graph=True)
+from tensorflow.keras.callbacks import TensorBoard
 
+log_dir = "logs/snn_vgg16/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+tensorboard_cb = TensorBoard(
+    log_dir=log_dir,
+    histogram_freq=1,       # Logs weights & biases histograms every epoch
+    write_graph=True,       # Saves the computation graph
+    write_images=True,      # Saves weight images for visualization
+    update_freq='epoch',    # Can use 'batch' for more granular logging
+    profile_batch=0         # Disable profiler (set to (2,5) to profile specific batches)
+)
 
 
 robustness_params={
@@ -153,7 +161,7 @@ if args.training:
     import tensorflow as tf
     from tensorflow.keras.datasets import cifar10
 
-    logging.info(model.summary())
+    # logging.info(model.summary())
 
     logging.info("#### Training ####")
 
@@ -176,28 +184,41 @@ if args.training:
  # Define a dummy loss function for the second output
     dummy_loss = lambda y_true, y_pred: 0.0
 
+    num_dummy = 1  # or 14 in your full model
     model.compile(
         optimizer=tf.keras.optimizers.Adam(),
-        loss=[tf.keras.losses.CategoricalCrossentropy(from_logits=True), dummy_loss],
-        loss_weights=[1.0, 0.0],  # only first output affects training
-        metrics=['accuracy']
+        loss=[tf.keras.losses.CategoricalCrossentropy(from_logits=True)] + [dummy_loss]*num_dummy,
+        loss_weights=[1.0] + [0.0]*num_dummy,  # first output affects training, dummy ignored
+        metrics={name: ['accuracy'] if i==0 else [] for i,name in enumerate(model.output_names)}
     )
+
+
+
 
 
     import numpy as np
 
     dummy_train = np.zeros((x_train.shape[0], 1))
     dummy_test = np.zeros((x_test.shape[0], 1))
+#     history = model.fit(
+#     x_train, y_train,            # only the real output
+#     batch_size=args.batch_size,
+#     epochs=args.epochs,
+#     validation_data=(x_test, y_test),
+#     callbacks=[tensorboard_cb]
+# )
+
+    dummy_train = np.zeros((x_train.shape[0], num_dummy))
+    dummy_test = np.zeros((x_test.shape[0], num_dummy))
 
     history = model.fit(
-        x_train, [y_train, dummy_train],
+        x_train, [y_train] + [dummy_train]*num_dummy,
         batch_size=args.batch_size,
         epochs=args.epochs,
-        verbose=1,
-        validation_data=(x_test, [y_test, dummy_test]),
-            callbacks=[tensorboard_cb]  # <--- add this
-
+        validation_data=(x_test, [y_test] + [dummy_test]*num_dummy),
+        callbacks=[tensorboard_cb]
     )
+
 
     # 7. Evaluate the model
     test_loss, test_acc, *_ = model.evaluate(
@@ -212,6 +233,7 @@ if args.training:
 
     # 9. Save the trained model
     model.save("weights/spiking_vgg_snn.h5")
+    print(history.history.keys())
     logging.info("Model saved to spiking_vgg_snn.h5")
 
 
