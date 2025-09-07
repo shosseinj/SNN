@@ -288,7 +288,7 @@ class ModelTmax(tf.keras.Model):
         super(ModelTmax, self).__init__(**kwargs)
 
     def train_step(self, data):
-        x, y_all = data
+        x, y_all = data   # y_all= [y_train] + [dummy_train]*num_dummy hossein
         with tf.GradientTape() as tape:
             y_pred_all = self(x, training=False) 
             loss = self.compiled_loss(y_all, y_pred_all[0], regularization_losses=self.losses)
