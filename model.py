@@ -415,5 +415,5 @@ def call_spiking(tj, W, D_i, t_min_prev, t_min, t_max, robustness_params):
     # No spike is modelled as t_max that cancels out in the next layer (tj-t_min) as t_min there is t_max
     ti = tf.where(ti < t_max, ti, t_max)
     # Add noise to the spiking time for noise simulations
-    ti = ti + tf.random.normal(tf.shape(ti), stddev=robustness_params['noise'], dtype=tf.dtypes.float64)
+    ti = ti + tf.random.normal(tf.shape(ti), stddev=robustness_params['noise'], dtype=tf.dtypes.float32)
     return ti

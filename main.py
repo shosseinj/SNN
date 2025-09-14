@@ -22,6 +22,7 @@ from tensorflow.keras.callbacks import Callback
 from tensorflow.keras.callbacks import TensorBoard
 import datetime
 
+tf.keras.backend.set_floatx('float32')
 
 class SaveWeightsEveryNEpochs(Callback):
     def __init__(self, save_path, n=10):
@@ -113,12 +114,9 @@ if 'FC2' in args.model_name:
         model = create_fc_model_ReLU(layers=2, optimizer=optimizer)
 if 'VGG' in args.model_name:
     # We consider one architecture, a 15-layer VGG-like network.
-    if 'MNIST' in args.data_name: #MNIST / FMNIST
-        layers2D=[64, 64, 128, 128, 'pool', 256, 256, 256, 'pool', 512, 512, 512, 'pool', 512, 512, 512, 'pool']
-        layers1D=[512, 512]
-    else:  #other: CIFAR10, CIFAR100
-        layers2D = [64, 64, 'pool', 128, 128, 'pool', 256, 256, 256, 'pool', 512, 512, 512, 'pool', 512, 512, 512, 'pool']
-        layers1D=[512]
+
+    layers2D = [64, 64, 'pool', 128, 128, 'pool', 256, 256, 256, 'pool', 512, 512, 512, 'pool', 512, 512, 512, 'pool']
+    layers1D=[512]
     kernel_size=(3,3)
     regularizer = None
     initializer = 'glorot_uniform' # keras default
@@ -165,20 +163,35 @@ if args.training:
 
     logging.info("#### Training ####")
 
-    # 1. Load CIFAR-10 Dataset
-    (x_train, y_train), (x_test, y_test) = cifar10.load_data()
+        # 1. Load CIFAR-10 Dataset
+    # (x_train, y_train), (x_test, y_test) = cifar10.load_data()
 
-    # 2. Normalize data to [0,1]
-    x_train = x_train.astype('float32') / 255.0
-    x_test = x_test.astype('float32') / 255.0
+
+ 
+    # def gen_x():
+    #     for img in x_train:
+    #         yield img.astype("float32") / 255.0
+
+    # def gen_y():
+    #     for lbl in y_train:
+    #         yield lbl
+
+    # x_train_ds = tf.data.Dataset.from_generator(gen_x, output_signature=tf.TensorSpec(shape=(32, 32, 3), dtype=tf.float32)).batch(args.batch_size)
+    # y_train_ds = tf.data.Dataset.from_generator(gen_y, output_signature=tf.TensorSpec(shape=(1,), dtype=tf.uint8)).batch(args.batch_size)
+
+
+
+    # x_test_ds = tf.data.Dataset.from_tensor_slices(x_test).map(lambda x: tf.cast(x, tf.float32) / 255.0).batch(args.batch_size)
+    # y_test_ds = tf.data.Dataset.from_tensor_slices(y_test).batch(args.batch_size)
+
 
     # 3. Convert labels to one-hot encoding
     num_classes = 10
-    y_train = tf.keras.utils.to_categorical(y_train, num_classes)
-    y_test = tf.keras.utils.to_categorical(y_test, num_classes)
+    # y_train = tf.keras.utils.to_categorical(y_train, num_classes)
+    # y_test = tf.keras.utils.to_categorical(y_test, num_classes)
 
     # 4. Optional: Take a small sample for quick debugging
-    x_sample = x_test[:10]
+    # x_sample = x_test[:10]
 
     # 5. Compile the model
  # Define a dummy loss function for the second output
@@ -197,39 +210,38 @@ if args.training:
 
 
     import numpy as np
+    data.x_train = data.x_train.astype('float32')
+    data.x_test  = data.x_test.astype('float32')
+    data.y_train = data.y_train.astype('float32')
+    data.y_test  = data.y_test.astype('float32')
 
-    dummy_train = np.zeros((x_train.shape[0], 1))
-    dummy_test = np.zeros((x_test.shape[0], 1))
-#     history = model.fit(
-#     x_train, y_train,            # only the real output
-#     batch_size=args.batch_size,
-#     epochs=args.epochs,
-#     validation_data=(x_test, y_test),
-#     callbacks=[tensorboard_cb]
-# )
+    dummy_train = np.zeros((data.x_train.shape[0], 1))
+    dummy_test = np.zeros((data.x_test.shape[0], 1))
 
-    dummy_train = np.zeros((x_train.shape[0], num_dummy))
-    dummy_test = np.zeros((x_test.shape[0], num_dummy))
+
+    dummy_train = np.zeros((data.x_train.shape[0], num_dummy))
+    dummy_test = np.zeros((data.x_test.shape[0], num_dummy))
 
     history = model.fit(
-        x_train, [y_train] + [dummy_train]*num_dummy,
+        data.x_train,
+        [data.y_train] + [dummy_train] * num_dummy,
         batch_size=args.batch_size,
         epochs=args.epochs,
-        validation_data=(x_test, [y_test] + [dummy_test]*num_dummy),
+        validation_data=(data.x_test, [data.y_test] + [dummy_test] * num_dummy),
         callbacks=[tensorboard_cb]
     )
     print(history.history)
 
     # 7. Evaluate the model
     test_loss, test_acc, *_ = model.evaluate(
-        x_test, [y_test, dummy_test], verbose=1
+        data.x_test, [data.y_test, dummy_test], verbose=1
     )
     logging.info(f"Test Accuracy: {test_acc:.4f}, Test Loss: {test_loss:.4f}")
 
     # 8. Make predictions on test sample
-    preds, min_activations = model.predict(x_sample)
-    predicted_labels = tf.argmax(tf.nn.softmax(preds), axis=1).numpy()
-    logging.info(f"Predicted labels for sample: {predicted_labels}")
+    # preds, min_activations = model.predict(x_sample)
+    # predicted_labels = tf.argmax(tf.nn.softmax(preds), axis=1).numpy()
+    # logging.info(f"Predicted labels for sample: {predicted_labels}")
 
     # 9. Save the trained model
     model.save("weights/spiking_vgg_snn.h5")
