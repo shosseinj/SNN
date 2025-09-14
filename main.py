@@ -52,7 +52,7 @@ parser.add_argument('--logging_dir', type=str, default='./logs/', help='Director
 parser.add_argument('--model_type', type=str, default='SNN', help='(SNN|ReLU)')
 parser.add_argument('--model_name', type=str, default='BN', help='Should contain (FC2|VGG[BN]): e.g. VGG_BN_test1')
 parser.add_argument('--lr', type=float, default=0.0005, help='Learning rate')
-parser.add_argument('--batch_size', type=int, default=256, help='Batch size')
+parser.add_argument('--batch_size', type=int, default=7, help='Batch size')
 parser.add_argument('--epochs', type=int, default=10, help='Epochs. 0 -skip training')
 parser.add_argument('--testing', type=strtobool, default=False, help='Execute testing.')
 parser.add_argument('--training', type=strtobool, default=True, help='Execute testing.')
@@ -218,7 +218,7 @@ if args.training:
         validation_data=(x_test, [y_test] + [dummy_test]*num_dummy),
         callbacks=[tensorboard_cb]
     )
-
+    print(history.history)
 
     # 7. Evaluate the model
     test_loss, test_acc, *_ = model.evaluate(

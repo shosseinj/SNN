@@ -290,8 +290,8 @@ class ModelTmax(tf.keras.Model):
     def train_step(self, data):
         x, y_all = data   # y_all= [y_train] + [dummy_train]*num_dummy hossein
         with tf.GradientTape() as tape:
-            y_pred_all = self(x, training=False) 
-            loss = self.compiled_loss(y_all, y_pred_all[0], regularization_losses=self.losses)
+            y_pred_all = self(x, training=True) 
+            loss = self.compiled_loss(y_all[0], y_pred_all[0], regularization_losses=self.losses)
         trainable_vars = self.trainable_variables
         gradients = tape.gradient(loss, trainable_vars)
         self.optimizer.apply_gradients(zip(gradients, trainable_vars))
@@ -309,7 +309,9 @@ class ModelTmax(tf.keras.Model):
                 if k==len(y_pred_all[1]): break
                 k+=1
         self.compiled_metrics.update_state(y_all, y_pred_all[0])
-        return {m.name: m.result() for m in self.metrics}
+        # return {m.name: m.result() for m in self.metrics}
+        return {**{m.name: m.result() for m in self.metrics}, "loss": loss}
+
     
     def test_step(self, data):
         x, y_all = data

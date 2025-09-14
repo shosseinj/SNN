@@ -3,7 +3,3 @@ WARNING:tensorflow:From i:\SNN\drive-download-20250810T143457Z-1-001\myvenv1\Lib
 
 INFO:root:#### Setting SNN intervals ####
 INFO:root:#### Training ####
-INFO:root:Test Accuracy: 0.0001, Test Loss: 0.0001
-INFO:root:Predicted labels for sample: [5 5 5 5 5 5 5 5 5 5]
-WARNING:absl:You are saving your model as an HDF5 file via `model.save()` or `keras.saving.save_model(model)`. This file format is considered legacy. We recommend using instead the native Keras format, e.g. `model.save('my_model.keras')` or `keras.saving.save_model(model, 'my_model.keras')`. 
-DEBUG:h5py._conv:Creating converter from 5 to 3
