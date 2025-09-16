@@ -19,7 +19,7 @@ import numpy as np
 from keras import backend as K
 from keras import regularizers
 from utils import *
-tf.keras.backend.set_floatx('float64')
+tf.keras.backend.set_floatx('float32')
 from tensorflow.keras.layers import Lambda
 
 
@@ -156,7 +156,7 @@ class SpikingDense(tf.keras.layers.Layer):
         self.outputLayer=outputLayer
         self.t_min_prev, self.t_min, self.t_max=0, 0, 1
         self.robustness_params=robustness_params
-        self.alpha = tf.cast(tf.fill((units, ), 1), dtype=tf.float64) 
+        self.alpha = tf.cast(tf.fill((units, ), 1), dtype=tf.float32) 
         self.input_dim=input_dim
         self.regularizer = kernel_regularizer
         self.initializer = kernel_initializer
@@ -175,9 +175,9 @@ class SpikingDense(tf.keras.layers.Layer):
         """
         Set t_min_prev, t_min, t_max, J_ij (kernel) and vartheta_i (threshold) parameters of this layer. Alpha is fixed at 1.
         """
-        self.t_min_prev=tf.Variable(tf.constant(t_min_prev, dtype=tf.float64), trainable=False, name='t_min_prev')
-        self.t_min=tf.Variable(tf.constant(t_min, dtype=tf.float64), trainable=False, name='t_min')
-        self.t_max=tf.Variable(tf.constant(t_min+self.B_n, dtype=tf.float64), trainable=False, name='t_max')
+        self.t_min_prev=tf.Variable(tf.constant(t_min_prev, dtype=tf.float32), trainable=False, name='t_min_prev')
+        self.t_min=tf.Variable(tf.constant(t_min, dtype=tf.float32), trainable=False, name='t_min')
+        self.t_max=tf.Variable(tf.constant(t_min+self.B_n, dtype=tf.float32), trainable=False, name='t_max')
         return t_min, t_min+self.B_n
             
     def call(self, tj):
@@ -205,7 +205,7 @@ class SpikingConv2D(tf.keras.layers.Layer):
         self.B_n = (1 + 0.5) * X_n
         self.t_min_prev, self.t_min, self.t_max=0, 0, 1
         self.robustness_params=robustness_params
-        self.alpha = tf.cast(tf.fill((filters, ), 1), dtype=tf.float64)
+        self.alpha = tf.cast(tf.fill((filters, ), 1), dtype=tf.float32)
 
 
         self.noise=0 # by hossein
@@ -229,9 +229,9 @@ class SpikingConv2D(tf.keras.layers.Layer):
         """
         Set t_min_prev, t_min, t_max, J_ij (kernel) and vartheta_i (threshold) parameters of this layer. Alpha is fixed at 1.
         """
-        self.t_min_prev=tf.Variable(tf.constant(t_min_prev, dtype=tf.float64), trainable=False, name='t_min_prev')
-        self.t_min=tf.Variable(tf.constant(t_min, dtype=tf.float64), trainable=False, name='t_min')
-        self.t_max=tf.Variable(tf.constant(t_min+self.B_n, dtype=tf.float64), trainable=False, name='t_max')
+        self.t_min_prev=tf.Variable(tf.constant(t_min_prev, dtype=tf.float32), trainable=False, name='t_min_prev')
+        self.t_min=tf.Variable(tf.constant(t_min, dtype=tf.float32), trainable=False, name='t_min')
+        self.t_max=tf.Variable(tf.constant(t_min+self.B_n, dtype=tf.float32), trainable=False, name='t_max')
         return t_min, t_min+self.B_n
 
     def call(self, tj):
@@ -299,7 +299,7 @@ class ModelTmax(tf.keras.Model):
         for layer in self.layers:
             if 'conv' in layer.name or 'dense' in layer.name: 
                 try:
-                    t_max=t_min + tf.maximum(tf.cast(layer.t_max-layer.t_min, dtype=tf.float64), 10.0*(layer.t_max-tf.reduce_min(y_pred_all[1][k])))
+                    t_max=t_min + tf.maximum(tf.cast(layer.t_max-layer.t_min, dtype=tf.float32), 10.0*(layer.t_max-tf.reduce_min(y_pred_all[1][k])))
                 except IndexError:
                     t_max=0
                 layer.t_min_prev.assign(t_min_prev)
@@ -308,7 +308,7 @@ class ModelTmax(tf.keras.Model):
                 t_min_prev, t_min = t_min, t_max
                 if k==len(y_pred_all[1]): break
                 k+=1
-        self.compiled_metrics.update_state(y_all, y_pred_all[0])
+        self.compiled_metrics.update_state(y_all[0], y_pred_all[0])
         # return {m.name: m.result() for m in self.metrics}
         return {**{m.name: m.result() for m in self.metrics}, "loss": loss}
 
@@ -401,11 +401,11 @@ def call_spiking(tj, W, D_i, t_min_prev, t_min, t_max, robustness_params):
     if robustness_params['time_bits'] != 0:
         tj = t_min_prev+tf.quantization.fake_quant_with_min_max_args(tf.cast(tj-t_min_prev, dtype=tf.float32),
             min=t_min_prev, max=t_min, num_bits=robustness_params['time_bits'])
-        tj = tf.cast(tj, tf.float64)
+        tj = tf.cast(tj, tf.float32)
     if robustness_params['weight_bits'] != 0:
         W = tf.quantization.fake_quant_with_min_max_args(tf.cast(W, dtype=tf.float32),
             min=robustness_params['w_min'], max=robustness_params['w_max'], num_bits=robustness_params['weight_bits'])
-        W = tf.cast(W, tf.float64)
+        W = tf.cast(W, tf.float32)
 
     # Calculate the spiking threshold (Eq. 18)
     threshold = t_max - t_min - D_i

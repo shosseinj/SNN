@@ -52,7 +52,7 @@ def get_optimizer(lr):
 #         """
 #         # The bias Variable is added in this function and can have 9 potential values for each filter.
 #         # W can represent the kernel before fusion and b_term corresponds to the term which is multiplied with kernel (see Eqs. 9, 11, etc.).  
-#         self.bias = self.add_weight(shape=(9, self.filters), initializer='zeros', dtype=tf.float64, name='bias')
+#         self.bias = self.add_weight(shape=(9, self.filters), initializer='zeros', dtype=tf.float32, name='bias')
 #         self.use_custom_bias = True
 #         self.use_bias = False  # disable standard bias logic
 #         if W is not None: 
@@ -63,9 +63,9 @@ def get_optimizer(lr):
 #             # delta_sum_W calculates kernel summation of the weights which correspond to the zero-padded inputs for the particular image part. 
 #             if i==0:
 #                 # This branch corresponds to the inner part of the image which has unchanged bias.
-#                 b_term=tf.cast(b_term, dtype=tf.float64)
+#                 b_term=tf.cast(b_term, dtype=tf.float32)
 #                 # delta_sum_W is equal to 0 which yields unchanged bias.
-#                 delta_sum_W = tf.zeros((tf.shape(b_term)[0], 1), dtype=tf.float64)
+#                 delta_sum_W = tf.zeros((tf.shape(b_term)[0], 1), dtype=tf.float32)
 #             elif i==1:
 #                 # This branch corresponds to the top left corner of the image, etc. 
 #                 delta_sum_W = (W_sum_2D - tf.reduce_sum(W[1:, 1:, :, :], axis=[0, 1]))
@@ -136,21 +136,21 @@ class Conv2DWithBias(tf.keras.layers.Conv2D):
             shape=(1,),
             initializer='zeros',
             trainable=False,
-            dtype=tf.float64
+            dtype=tf.float32
         )
         self.BN_before_ReLU = self.add_weight(
             name='BN_before_ReLU',
             shape=(1,),
             initializer='zeros',
             trainable=False,
-            dtype=tf.float64
+            dtype=tf.float32
         )
         self.bias = self.add_weight(
             name='bias',
             shape=(9, self.filters),
             initializer='zeros',
             trainable=True,
-            dtype=tf.float64
+            dtype=tf.float32
         )
         
     def set_bias(self, bias, W=None, b_term=[0.0]):
@@ -159,7 +159,7 @@ class Conv2DWithBias(tf.keras.layers.Conv2D):
         """
         # The bias Variable is added in this function and can have 9 potential values for each filter.
         # W can represent the kernel before fusion and b_term corresponds to the term which is multiplied with kernel (see Eqs. 9, 11, etc.).  
-        # self.bias = self.add_weight(shape=(9, self.filters), initializer='zeros', dtype=tf.float64, name='bias')
+        # self.bias = self.add_weight(shape=(9, self.filters), initializer='zeros', dtype=tf.float32, name='bias')
         self.use_custom_bias = True
         # self.use_bias = False  # disable standard bias logic
         if W is not None: 
@@ -170,9 +170,9 @@ class Conv2DWithBias(tf.keras.layers.Conv2D):
             # delta_sum_W calculates kernel summation of the weights which correspond to the zero-padded inputs for the particular image part. 
             if i==0:
                 # This branch corresponds to the inner part of the image which has unchanged bias.
-                b_term=tf.cast(b_term, dtype=tf.float64)
+                b_term=tf.cast(b_term, dtype=tf.float32)
                 # delta_sum_W is equal to 0 which yields unchanged bias.
-                delta_sum_W = tf.zeros((tf.shape(b_term)[0], 1), dtype=tf.float64)
+                delta_sum_W = tf.zeros((tf.shape(b_term)[0], 1), dtype=tf.float32)
             elif i==1:
                 # This branch corresponds to the top left corner of the image, etc. 
                 delta_sum_W = (W_sum_2D - tf.reduce_sum(W[1:, 1:, :, :], axis=[0, 1]))
@@ -274,7 +274,7 @@ class MaxMinPool2D(tf.keras.layers.MaxPool2D):
         super().build(input_shape)
         # By default the sign is set to 1, which yields max pooling functionality.
         # The sign variable can be changed for some channels when batch normalization is fused with the next convolutonal layer and it changes the sign of the weights. 
-        self.sign=tf.Variable(tf.constant(np.ones((1, 1, 1, input_shape[-1]))), dtype=tf.float64, name='sign', trainable=False)
+        self.sign=tf.Variable(tf.constant(np.ones((1, 1, 1, input_shape[-1]))), dtype=tf.float32, name='sign', trainable=False)
     def call(self, inputs):
         # Max pooling functionality is called on (self.sign*inputs) input. 
         return super().call(self.sign*inputs)*self.sign
@@ -428,8 +428,8 @@ def fuse_imaginary_bn(fused_model, model, p, q):
     """
     first_layer = model.layers[1]  # conv2d_1
     input_image_shape, _, input_channels, _ = tf.shape(first_layer.kernel) #input_image = 32, input_channel=3
-    kappa = tf.cast(tf.fill((input_channels), value=q-p), dtype=tf.float64) #scaling factor vector with size 3
-    b_term=tf.cast(tf.fill((input_channels), value=p), dtype=tf.float64) # offset vector with value p 
+    kappa = tf.cast(tf.fill((input_channels), value=q-p), dtype=tf.float32) #scaling factor vector with size 3
+    b_term=tf.cast(tf.fill((input_channels), value=p), dtype=tf.float32) # offset vector with value p 
     if 'conv' in first_layer.name:
         kappa=tf.tile(kappa, [input_image_shape**2])
         b_term=tf.tile(b_term, [input_image_shape**2])
@@ -447,7 +447,7 @@ def fuse_imaginary_bn(fused_model, model, p, q):
         # layer.set_weights([W_fused, np.array([1]), np.array([0])])
         # layer.set_weights([W_fused])
         filters = W_fused.shape[-1]
-        bias_placeholder = np.zeros((9, filters), dtype=np.float64)
+        bias_placeholder = np.zeros((9, filters), dtype=np.float32)
 
         new_weights = []
 
@@ -455,12 +455,12 @@ def fuse_imaginary_bn(fused_model, model, p, q):
             if 'kernel' in w.name:
                 new_weights.append(W_fused)
             elif 'BN_before_ReLU' in w.name:
-                new_weights.append(np.array([0.], dtype=np.float64))
+                new_weights.append(np.array([0.], dtype=np.float32))
             elif 'BN' in w.name:
-                new_weights.append(np.array([1.], dtype=np.float64))
+                new_weights.append(np.array([1.], dtype=np.float32))
             elif 'bias' in w.name:
                 filters = W_fused.shape[-1]
-                bias_placeholder = np.zeros((9, filters), dtype=np.float64)
+                bias_placeholder = np.zeros((9, filters), dtype=np.float32)
                 new_weights.append(bias_placeholder)
             else:
                 raise ValueError(f"Unexpected weight name: {w.name}")
@@ -564,7 +564,7 @@ def fuse_bn_after_activation(fused_model, model, i):
         # Set BN flag to 1 and BN_before_ReLU to 0.
         # layer.set_weights([W_fused, np.array([1]), np.array([0])])
         filters = W_fused.shape[-1]
-        bias_placeholder = np.zeros((9, filters), dtype=np.float64)
+        bias_placeholder = np.zeros((9, filters), dtype=np.float32)
 
         new_weights = []
 
@@ -572,12 +572,12 @@ def fuse_bn_after_activation(fused_model, model, i):
             if 'kernel' in w.name:
                 new_weights.append(W_fused)
             elif 'BN_before_ReLU' in w.name:
-                new_weights.append(np.array([0.], dtype=np.float64))
+                new_weights.append(np.array([0.], dtype=np.float32))
             elif 'BN' in w.name:
-                new_weights.append(np.array([1.], dtype=np.float64))
+                new_weights.append(np.array([1.], dtype=np.float32))
             elif 'bias' in w.name:
                 filters = W_fused.shape[-1]
-                bias_placeholder = np.zeros((9, filters), dtype=np.float64)
+                bias_placeholder = np.zeros((9, filters), dtype=np.float32)
                 new_weights.append(bias_placeholder)
             else:
                 raise ValueError(f"Unexpected weight name: {w.name}")

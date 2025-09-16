@@ -6,7 +6,7 @@
       "type": "python",
       "request": "launch",
       "program": "${workspaceFolder}/main.py",
-      //   "python": "${workspaceFolder}/myvenv1/Scripts/python.exe",
+      "python": "C:/Users/jafari.h/AppData/Local/Programs/Python/Python310/python.exe",
       "args": [
         "--model_type=SNN",
         // "--model_type=ReLU",

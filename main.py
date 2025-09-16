@@ -22,6 +22,16 @@ from tensorflow.keras.callbacks import Callback
 from tensorflow.keras.callbacks import TensorBoard
 import datetime
 
+import tensorflow as tf
+
+gpus = tf.config.experimental.list_physical_devices('GPU')
+if gpus:
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+    except RuntimeError as e:
+        print(e)
+
 tf.keras.backend.set_floatx('float32')
 
 class SaveWeightsEveryNEpochs(Callback):
@@ -41,8 +51,8 @@ class SaveWeightsEveryNEpochs(Callback):
 
 
 start_time = time.time()
-# tf.keras.backend.set_floatx('float64') #to avoid numerical differences when comparing training of ReLU vs SNN
-# tf.keras.backend.set_floatx('float64') #to avoid numerical differences when comparing training of ReLU vs SNN
+# tf.keras.backend.set_floatx('float32') #to avoid numerical differences when comparing training of ReLU vs SNN
+# tf.keras.backend.set_floatx('float32') #to avoid numerical differences when comparing training of ReLU vs SNN
 override = None
 
 
@@ -53,7 +63,7 @@ parser.add_argument('--logging_dir', type=str, default='./logs/', help='Director
 parser.add_argument('--model_type', type=str, default='SNN', help='(SNN|ReLU)')
 parser.add_argument('--model_name', type=str, default='BN', help='Should contain (FC2|VGG[BN]): e.g. VGG_BN_test1')
 parser.add_argument('--lr', type=float, default=0.0005, help='Learning rate')
-parser.add_argument('--batch_size', type=int, default=7, help='Batch size')
+parser.add_argument('--batch_size', type=int, default=700, help='Batch size')
 parser.add_argument('--epochs', type=int, default=10, help='Epochs. 0 -skip training')
 parser.add_argument('--testing', type=strtobool, default=False, help='Execute testing.')
 parser.add_argument('--training', type=strtobool, default=True, help='Execute testing.')
@@ -210,10 +220,10 @@ if args.training:
 
 
     import numpy as np
-    data.x_train = data.x_train.astype('float32')
-    data.x_test  = data.x_test.astype('float32')
-    data.y_train = data.y_train.astype('float32')
-    data.y_test  = data.y_test.astype('float32')
+    # data.x_train = data.x_train.astype('float32')
+    # data.x_test  = data.x_test.astype('float32')
+    # data.y_train = data.y_train.astype('float32')
+    # data.y_test  = data.y_test.astype('float32')
 
     dummy_train = np.zeros((data.x_train.shape[0], 1))
     dummy_test = np.zeros((data.x_test.shape[0], 1))

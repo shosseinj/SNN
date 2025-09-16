@@ -5,3 +5,14 @@ myvenv
 .pkl
 *.h5
 *.npz
+./newvenv/
+newvenv
+*.pyi
+.pyi
+*.rst
+.rst
+logs/*
+logs/
+*/logs/
+*.png
+*.txt

@@ -1,1 +1,23 @@
 INFO:root:#### Creating the model ####
+INFO:root:#### Setting SNN intervals ####
+INFO:root:#### Training ####
+WARNING:tensorflow:Model failed to serialize as JSON. Ignoring... 
+Layer SpikingConv2D has arguments ['filters', 'X_n', 'padding', 'kernel_size', 'robustness_params', 'kernel_regularizer', 'kernel_initializer']
+in `__init__` and therefore must override `get_config()`.
+
+Example:
+
+class CustomLayer(keras.layers.Layer):
+    def __init__(self, arg1, arg2):
+        super().__init__()
+        self.arg1 = arg1
+        self.arg2 = arg2
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "arg1": self.arg1,
+            "arg2": self.arg2,
+        })
+        return config
+INFO:root:Test Accuracy: 2.3026, Test Loss: 2.3026

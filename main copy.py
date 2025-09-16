@@ -37,8 +37,8 @@ class SaveWeightsEveryNEpochs(Callback):
 
 
 start_time = time.time()
-# tf.keras.backend.set_floatx('float64') #to avoid numerical differences when comparing training of ReLU vs SNN
-# tf.keras.backend.set_floatx('float64') #to avoid numerical differences when comparing training of ReLU vs SNN
+# tf.keras.backend.set_floatx('float32') #to avoid numerical differences when comparing training of ReLU vs SNN
+# tf.keras.backend.set_floatx('float32') #to avoid numerical differences when comparing training of ReLU vs SNN
 override = None
 
 
