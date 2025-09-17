@@ -288,31 +288,57 @@ class ModelTmax(tf.keras.Model):
         super(ModelTmax, self).__init__(**kwargs)
 
     def train_step(self, data):
-        x, y_all = data   # y_all= [y_train] + [dummy_train]*num_dummy hossein
+        x, y_all = data
+        # y_all[0] shape : TensorShape([128, 10]) => real labels 
+        # y_all[1] shape : TensorShape([128, 1]) => 
+
+
+        # y_pred_all[0] shape : TensorShape([128, 10]) =>  predicted output 
+        # len(y_pred_all[1]) =14    number of layers for dummy 
+
         with tf.GradientTape() as tape:
-            y_pred_all = self(x, training=True) 
+            y_pred_all = self(x, training=True)
             loss = self.compiled_loss(y_all[0], y_pred_all[0], regularization_losses=self.losses)
-        trainable_vars = self.trainable_variables
-        gradients = tape.gradient(loss, trainable_vars)
-        self.optimizer.apply_gradients(zip(gradients, trainable_vars))
-        t_min_prev, t_min, k=0.0, 1.0, 0
+
+        gradients = tape.gradient(loss, self.trainable_variables)
+        self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
+
+        # Timing parameters
+        t_min_prev, t_min, k = 0.0, 1.0, 0
         for layer in self.layers:
-            if 'conv' in layer.name or 'dense' in layer.name: 
+            if 'conv' in layer.name or 'dense' in layer.name:
                 try:
-                    t_max=t_min + tf.maximum(tf.cast(layer.t_max-layer.t_min, dtype=tf.float32), 10.0*(layer.t_max-tf.reduce_min(y_pred_all[1][k])))
+                    t_max = t_min + tf.maximum(
+                        tf.cast(layer.t_max - layer.t_min, tf.float32),
+                        10.0 * (layer.t_max - tf.reduce_min(y_pred_all[1][k]))
+                    )
                 except IndexError:
-                    t_max=0
-                layer.t_min_prev.assign(t_min_prev)
-                layer.t_min.assign(t_min)
-                layer.t_max.assign(t_max)
+                    t_max = 0.0
+
+                # ✅ use assign only if these are tf.Variables
+                if isinstance(layer.t_min_prev, tf.Variable):
+                    layer.t_min_prev.assign(t_min_prev)
+                    layer.t_min.assign(t_min)
+                    layer.t_max.assign(t_max)
+                else:
+                    # fallback: overwrite
+                    layer.t_min_prev = tf.Variable(t_min_prev, trainable=False, dtype=tf.float32)
+                    layer.t_min = tf.Variable(t_min, trainable=False, dtype=tf.float32)
+                    layer.t_max = tf.Variable(t_max, trainable=False, dtype=tf.float32)
+
                 t_min_prev, t_min = t_min, t_max
-                if k==len(y_pred_all[1]): break
-                k+=1
+                if k == len(y_pred_all[1]):
+                    break
+                k += 1
+
         self.compiled_metrics.update_state(y_all[0], y_pred_all[0])
-        # return {m.name: m.result() for m in self.metrics}
+        tf.print("Metrics:")
+        for m in self.metrics:
+            tf.print(m.name, ":", m.result())
+
         return {**{m.name: m.result() for m in self.metrics}, "loss": loss}
 
-    
+
     def test_step(self, data):
         x, y_all = data
         y_pred_all = self(x, training=False) 
