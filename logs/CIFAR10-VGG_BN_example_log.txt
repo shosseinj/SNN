@@ -1,1 +1,4 @@
 INFO:root:### Starting Training Script ###
+INFO:root:#### Creating the model ####
+INFO:root:#### Training ####
+INFO:root:Test Accuracy: 0.1000, Test Loss: 2.3028

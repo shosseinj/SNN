@@ -149,11 +149,12 @@ def main():
             initializer = 'he_uniform'
 
         if args.model_type == 'SNN':
-            model = create_vgg_model_SNN(
-                layers2D, kernel_size, layers1D, data, optimizer,
-                robustness_params=robustness_params,
-                kernel_regularizer=regularizer, kernel_initializer=initializer
-            )
+            model = VGG_SNN(layers2D, kernel_size=(3,3), layers1D=layers1D, data=data, optimizer=optimizer, robustness_params=robustness_params)
+
+
+
+# model = VGG_SNN(layers2D=[32, 64, 'pool'], layers1D=[128, 64], data=data)
+# y_pred, min_ti = model(data.x_train[:4])
         else:
             model = VGG16()
 
@@ -162,22 +163,30 @@ def main():
     # ==============================
     # TRAINING
     # ==============================
-    x_batch = data.x_train[:4]  # shape (4, 32, 32, 3)
 
-# call your model
-    outputs, min_ti = model(x_batch, training=True) 
+
+
+
+# ------------------------
+# Training example
+
+
+ 
+
+
+
     if args.training:
         logging.info("#### Training ####")
 
         # Compile model
         num_dummy = 1
         dummy_loss = lambda y_true, y_pred: 0.0
-        model.compile(
-            optimizer=Adam(),
-            loss=[CategoricalCrossentropy(from_logits=True)] + [dummy_loss] * num_dummy,
-            loss_weights=[1.0] + [0.0] * num_dummy,
-            metrics={name: ['accuracy'] if i == 0 else [] for i, name in enumerate(model.output_names)}
-        )
+        # model.compile(
+        #     optimizer=Adam(),
+        #     loss=[CategoricalCrossentropy(from_logits=True)] + [dummy_loss] * num_dummy,
+        #     loss_weights=[1.0] + [0.0] * num_dummy,
+        #     metrics={name: ['accuracy'] if i == 0 else [] for i, name in enumerate(model.output_names)}
+        # )
 
         # Dummy outputs
         dummy_train = np.zeros((data.x_train.shape[0], num_dummy))
@@ -189,15 +198,21 @@ def main():
       
       
 
-        history = model.fit(
-            data.x_train,
-            [data.y_train] + [dummy_train] * num_dummy,
-            batch_size=args.batch_size,
-            epochs=args.epochs,
-            validation_data=(data.x_test, [data.y_test] + [dummy_test] * num_dummy),
-            callbacks=[tensorboard_cb, save_cb, checkpoint_cb],
-            verbose=1
-        )
+        model.compile(optimizer=optimizer, loss=CategoricalCrossentropy(from_logits=True), metrics=['accuracy'])
+
+        history = model.fit(data.x_train, data.y_train, batch_size=args.batch_size, epochs=args.epochs, validation_data=(data.x_test, data.y_test))
+
+
+
+        # history = model.fit(
+        #     data.x_train,
+        #     [data.y_train] + [dummy_train] * num_dummy,
+        #     batch_size=args.batch_size,
+        #     epochs=args.epochs,
+        #     validation_data=(data.x_test, [data.y_test] + [dummy_test] * num_dummy),
+        #     callbacks=[tensorboard_cb, save_cb, checkpoint_cb],
+        #     verbose=1
+        # )
 
         # Evaluate
         test_loss, test_acc, *_ = model.evaluate(data.x_test, [data.y_test, dummy_test], verbose=1)
