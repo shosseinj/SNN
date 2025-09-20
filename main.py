@@ -194,14 +194,26 @@ def main():
 
         # Callbacks
         save_cb = SaveWeightsEveryNEpochs("weights/", n=5)
-        checkpoint_cb = ModelCheckpoint("weights/best_model.h5", save_best_only=True, monitor="val_loss")
+        checkpoint_cb = ModelCheckpoint(
+            "weights/best_model",      # no .h5 extension
+            save_best_only=True,
+            monitor="val_loss",
+            save_weights_only=True     # ⚠ important
+        )
       
       
 
         model.compile(optimizer=optimizer, loss=CategoricalCrossentropy(from_logits=True), metrics=['accuracy'])
 
-        history = model.fit(data.x_train, data.y_train, batch_size=args.batch_size, epochs=args.epochs, validation_data=(data.x_test, data.y_test))
-
+        history = model.fit(
+    data.x_train,
+    data.y_train,
+    batch_size=args.batch_size,
+    epochs=args.epochs,
+    validation_data=(data.x_test, data.y_test),
+    callbacks=[tensorboard_cb, save_cb, checkpoint_cb],   # <-- add callbacks here
+    verbose=1
+)
 
 
         # history = model.fit(
@@ -219,7 +231,7 @@ def main():
         logging.info(f"Test Accuracy: {test_acc:.4f}, Test Loss: {test_loss:.4f}")
 
         if args.save:
-            model.save("weights/final_model.h5")
+            model.save_weights("weights/final_model")  # TF format
             logging.info("Model saved → weights/final_model.h5")
 
     # ==============================
