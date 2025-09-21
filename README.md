@@ -62,7 +62,7 @@ python main.py --model_type=ReLU --model_name=VGG_BN_example --data_name=CIFAR10
 Fine-tune SNN VGG16 on CIFAR10 (~12 min):
 
 ```
-python main.py --model_type=SNN --lr=1e-6 --model_name=VGG_BN_example --data_name=CIFAR10 --load=True --epochs=1
+python main.py --model_type=SNN --lr=1e-3 --model_name=VGG_BN_example --data_name=CIFAR10 --load=True --epochs=400
 ```
 
 ## Feedback
