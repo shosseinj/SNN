@@ -389,38 +389,102 @@ class MaxMinPool2D(tf.keras.layers.Layer):
         return x
 
 class VGG_SNN(tf.keras.Model):
-    def __init__(self, layers2D, kernel_size, layers1D, data, optimizer, robustness_params={}):
+    def __init__(self, layers2D, kernel_size, layers1D, data, optimizer, robustness_params):
         super().__init__()
-        self.conv_layers = []
-        for i, f in enumerate(layers2D):
-            if f != 'pool':
-                self.conv_layers.append(
-                    SpikingConv2D(f, kernel_size=kernel_size, X_n=1000,
-                                robustness_params=robustness_params, name=f'conv_{i+1}')
-                )
-            else:
-                self.conv_layers.append(MaxMinPool2D(pool_size=2))
-        
+
+        # Convolutional layers
+        self.conv_1 = SpikingConv2D(64, kernel_size=(3,3), X_n=1000,
+                                    robustness_params=robustness_params, name='conv_1')
+        self.conv_2 = SpikingConv2D(64, kernel_size=(3,3), X_n=1000,
+                                    robustness_params=robustness_params, name='conv_2')
+        self.pool_1 = MaxMinPool2D(pool_size=2)
+
+        self.conv_3 = SpikingConv2D(128, kernel_size=(3,3), X_n=1000,
+                                    robustness_params=robustness_params, name='conv_3')
+        self.conv_4 = SpikingConv2D(128, kernel_size=(3,3), X_n=1000,
+                                    robustness_params=robustness_params, name='conv_4')
+        self.pool_2 = MaxMinPool2D(pool_size=2)
+
+        self.conv_5 = SpikingConv2D(256, kernel_size=(3,3), X_n=1000,
+                                    robustness_params=robustness_params, name='conv_5')
+        self.conv_6 = SpikingConv2D(256, kernel_size=(3,3), X_n=1000,
+                                    robustness_params=robustness_params, name='conv_6')
+        self.conv_7 = SpikingConv2D(256, kernel_size=(3,3), X_n=1000,
+                                    robustness_params=robustness_params, name='conv_7')
+        self.pool_3 = MaxMinPool2D(pool_size=2)
+
+        self.conv_8 = SpikingConv2D(512, kernel_size=(3,3), X_n=1000,
+                                    robustness_params=robustness_params, name='conv_8')
+        self.conv_9 = SpikingConv2D(512, kernel_size=(3,3), X_n=1000,
+                                    robustness_params=robustness_params, name='conv_9')
+        self.conv_10 = SpikingConv2D(512, kernel_size=(3,3), X_n=1000,
+                                     robustness_params=robustness_params, name='conv_10')
+        self.pool_4 = MaxMinPool2D(pool_size=2)
+
+        self.conv_11 = SpikingConv2D(512, kernel_size=(3,3), X_n=1000,
+                                     robustness_params=robustness_params, name='conv_11')
+        self.conv_12 = SpikingConv2D(512, kernel_size=(3,3), X_n=1000,
+                                     robustness_params=robustness_params, name='conv_12')
+        self.conv_13 = SpikingConv2D(512, kernel_size=(3,3), X_n=1000,
+                                     robustness_params=robustness_params, name='conv_13')
+        self.pool_5 = MaxMinPool2D(pool_size=2)
+
+        # Flatten layer
         self.flatten = tf.keras.layers.Flatten()
-        self.dense_layers = [
-            SpikingDense(512, X_n=1000, robustness_params=robustness_params, name='dense_1')
-        ]
-        self.output_layer = SpikingDense(
-            data.num_of_classes, 
-            outputLayer=True, 
-            robustness_params=robustness_params, 
+
+        # Dense layers
+        self.dense_1 = SpikingDense(512, X_n=1000, robustness_params=robustness_params, name='dense_1')
+        self.dense_out = SpikingDense(
+            data.num_of_classes,
+            outputLayer=True,
+            robustness_params=robustness_params,
             name='dense_out'
         )
+
         self.optimizer = optimizer
+        self.conv_layers = [
+            self.conv_1, self.conv_2, self.pool_1,
+            self.conv_3, self.conv_4, self.pool_2,
+            self.conv_5, self.conv_6, self.conv_7, self.pool_3,
+            self.conv_8, self.conv_9, self.conv_10, self.pool_4,
+            self.conv_11, self.conv_12, self.conv_13, self.pool_5
+        ]
+
+        self.dense_layers = [self.dense_1]
+        self.output_layer = self.dense_out
 
     def call(self, x, training=False):
-        ti = x
-        for layer in self.conv_layers:
-            ti = layer(ti)
-        ti = self.flatten(ti)
-        for layer in self.dense_layers:
-            ti = layer(ti)
-        out = self.output_layer(ti)
+        # Forward pass through conv layers
+        x = self.conv_1(x)
+        x = self.conv_2(x)
+        x = self.pool_1(x)
+
+        x = self.conv_3(x)
+        x = self.conv_4(x)
+        x = self.pool_2(x)
+
+        x = self.conv_5(x)
+        x = self.conv_6(x)
+        x = self.conv_7(x)
+        x = self.pool_3(x)
+
+        x = self.conv_8(x)
+        x = self.conv_9(x)
+        x = self.conv_10(x)
+        x = self.pool_4(x)
+
+        x = self.conv_11(x)
+        x = self.conv_12(x)
+        x = self.conv_13(x)
+        x = self.pool_5(x)
+
+        # Flatten
+        x = self.flatten(x)
+
+        # Forward pass through dense layers
+        x = self.dense_1(x)
+        out = self.dense_out(x)
+
         return out
 
 class SimpleSNN(tf.keras.Model):
