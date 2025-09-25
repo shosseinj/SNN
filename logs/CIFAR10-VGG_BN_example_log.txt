@@ -1,3 +1,0 @@
-INFO:root:### Starting Training Script ###
-INFO:root:#### Creating the model ####
-INFO:root:#### Training ####
