@@ -528,7 +528,17 @@ class VGG_SNN(tf.keras.Model):
 
     def call(self, x, training=False):
         # Forward pass through conv layers
+        # Inside VGG_SNN.call()
+        t_min, t_max = 0.0, 1.0
+        x = tf.clip_by_value(x, 0.0, 1.0)
+        x = t_min + (1.0 - x) * (t_max - t_min)
+    # ensure valid spike times
+
+        # -----------------------------
+        # Forward pass through conv layers
+        # -----------------------------
         x = self.conv_1(x)
+   
         x = self.conv_2(x)
         x = self.pool_1(x)
 
@@ -617,7 +627,7 @@ def create_model(args, data, optimizer, robustness_params):
         if os.path.exists(weights_path):
             try:
             # Load ANN (ReLU) VGG16
-                model_ann = VGG16(input_shape=data.input_shape, classes=data.num_of_classes, weights_path=weights_path)
+                model_ann = VGG16(input_shape=data.input_shape, classes=10, weights_path=weights_path)
                 print("[INFO] ANN weights loaded successfully")
 
                 # Build SNN model with dummy input
