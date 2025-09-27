@@ -17,6 +17,11 @@ from tensorflow.keras.models import Model, Sequential
 from tensorflow.keras.layers import Lambda, Input, Conv2D, BatchNormalization, Activation, Dropout, MaxPooling2D, Flatten, Dense
 from tensorflow.keras import regularizers
 
+
+import logging
+import tensorflow as tf
+from tensorflow.keras.layers import Conv2D, Input, Dense, MaxPool2D, Flatten, Dropout, BatchNormalization
+from tensorflow.keras.models import Model
 # ==============================
 # GPU CONFIGURATION
 # ==============================
@@ -285,108 +290,176 @@ def VGG16(input_shape=(32, 32, 3), classes=10, weights_path=None):
 # ==============================
 # SNN LAYERS
 # ==============================
+class MaxMinPool2D(tf.keras.layers.MaxPool2D):
+    """
+    Max Pooling or Min Pooling operation, depends on the sign of the batch normalization layer before.
+    """
+    def build(self, input_shape):
+        super().build(input_shape)
+        # By default the sign is set to 1, which yields max pooling functionality.
+        # The sign variable can be changed for some channels when batch normalization is fused with the next convolutonal layer and it changes the sign of the weights. 
+        self.sign=tf.Variable(tf.constant(np.ones((1, 1, 1, input_shape[-1]), dtype=np.float32))
+, dtype=tf.float32, name='sign', trainable=False)
+    def call(self, inputs):
+        # Max pooling functionality is called on (self.sign*inputs) input. 
+        return super().call(self.sign*inputs)*self.sign
+
+
+
 def call_spiking(tj, W, D_i, t_min_prev, t_min, t_max, robustness_params):
-    """Core spiking computation"""
+    """
+    Calculates spiking times from which ReLU functionality can be recovered.
+    Assumes tau_c=1 and B_i^(n)=1
+    """
+    if robustness_params['time_bits'] != 0:
+        tj = t_min_prev+tf.quantization.fake_quant_with_min_max_args(tf.cast(tj-t_min_prev, dtype=tf.float32),
+            min=t_min_prev, max=t_min, num_bits=robustness_params['time_bits'])
+        tj = tf.cast(tj, tf.float64)
+    if robustness_params['weight_bits'] != 0:
+        W = tf.quantization.fake_quant_with_min_max_args(tf.cast(W, dtype=tf.float32),
+            min=robustness_params['w_min'], max=robustness_params['w_max'], num_bits=robustness_params['weight_bits'])
+        W = tf.cast(W, tf.float64)
+
+    # Calculate the spiking threshold (Eq. 18)
     threshold = t_max - t_min - D_i
-    ti = tf.matmul(tj - t_min, W) + threshold + t_min
+    # Calculate output spiking time ti (Eq. 7)
+    ti = (tf.matmul(tj-t_min, W) + threshold + t_min)
+    # Ensure valid spiking time. Do not spike for ti >= t_max.
+    # No spike is modelled as t_max that cancels out in the next layer (tj-t_min) as t_min there is t_max
     ti = tf.where(ti < t_max, ti, t_max)
-    ti = ti + tf.random.normal(tf.shape(ti), stddev=robustness_params.get('noise', 0.0))
+    # Add noise to the spiking time for noise simulations
+    ti = ti + tf.random.normal(tf.shape(ti), stddev=robustness_params['noise'], dtype=ti.dtype)
     return ti
 
 class SpikingDense(tf.keras.layers.Layer):
-    def __init__(self, units, X_n=1, outputLayer=False, robustness_params={}, input_dim=None, name=None):
-        super().__init__(name=name)
+    def __init__(self, units, name, X_n=1, outputLayer=False, robustness_params={}, input_dim=None,
+                 kernel_regularizer=None, kernel_initializer=None):
         self.units = units
-        self.outputLayer = outputLayer
         self.B_n = (1 + 0.5) * X_n
-        self.robustness_params = robustness_params
-        self.input_dim = input_dim
+        self.outputLayer=outputLayer
+        self.t_min_prev, self.t_min, self.t_max=0, 0, 1
+        self.robustness_params=robustness_params
+        self.alpha = tf.cast(tf.fill((units, ), 1), dtype=tf.float32) 
+        self.input_dim=input_dim
+        self.regularizer = kernel_regularizer
+        self.initializer = kernel_initializer
+        super(SpikingDense, self).__init__(name=name)
+    
+    def build(self, input_dim):
+        # In case this is the first dense layer after Flatten layer.
+        if input_dim[-1] is None: input_dim=(None, self.input_dim)
+        self.kernel = self.add_weight(shape=(input_dim[-1], self.units), name='kernel', regularizer=self.regularizer, initializer=self.initializer)
+        self.D_i = self.add_weight(shape=(self.units), initializer=tf.constant_initializer(0), name='D_i')
+        self.built = True
+    
+    def set_params(self, t_min_prev, t_min):
+        """
+        Set t_min_prev, t_min, t_max, J_ij (kernel) and vartheta_i (threshold) parameters of this layer. Alpha is fixed at 1.
+        """
+        self.t_min_prev=tf.Variable(tf.constant(t_min_prev, dtype=tf.float32), trainable=False, name='t_min_prev')
+        self.t_min=tf.Variable(tf.constant(t_min, dtype=tf.float32), trainable=False, name='t_min')
+        self.t_max=tf.Variable(tf.constant(t_min+self.B_n, dtype=tf.float32), trainable=False, name='t_max')
+        return t_min, t_min+self.B_n
+            
+    def call(self, tj):
+        """
+        Input spiking times tj, output spiking times ti or the value of membrane potential in case of output layer. 
+        """
+        output = call_spiking(tj, self.kernel, self.D_i, self.t_min_prev, self.t_min, self.t_max, self.robustness_params)
+        # In case of the output layer a simple integration is applied without spiking. 
+        if self.outputLayer:
+            # Read out the value of membrane potential at time t_min.
+            W_mult_x = tf.matmul(self.t_min-tj, self.kernel)
+            self.alpha = self.D_i/(self.t_min-self.t_min_prev)
+            output = self.alpha * (self.t_min - self.t_min_prev) + W_mult_x
 
-    def build(self, input_shape):
-        if input_shape[-1] is None and self.input_dim is not None:
-            input_shape = (None, self.input_dim)
-        self.kernel = self.add_weight(
-            shape=(input_shape[-1], self.units),
-            initializer='glorot_uniform', 
-            trainable=True, 
-            name='kernel',
-            regularizer=tf.keras.regularizers.l2(5e-4)
-        )
-        self.D_i = self.add_weight(shape=(self.units,), initializer='zeros', trainable=True, name='D_i')
-        self.t_min_prev = tf.Variable(0.0, trainable=False)
-        self.t_min = tf.Variable(0.0, trainable=False)
-        self.t_max = tf.Variable(1.0, trainable=False)
+           
+        return output
+    
+    
+class SpikingConv2D(tf.keras.layers.Layer):
+    def __init__(self, filters, name, X_n=1, padding='same', kernel_size=(3,3), robustness_params={},
+                 kernel_regularizer=None, kernel_initializer=None):
+        self.filters=filters
+        self.kernel_size=kernel_size
+        self.padding=padding
+        self.regularizer = kernel_regularizer
+        self.initializer = kernel_initializer
+        self.B_n = (1 + 0.5) * X_n
+        self.t_min_prev, self.t_min, self.t_max=0, 0, 1
+        self.robustness_params=robustness_params
+        self.alpha = tf.cast(tf.fill((filters, ), 1), dtype=tf.float64)
+        super(SpikingConv2D, self).__init__(name=name)
+    
+    def build(self, input_dim):
+        self.kernel = self.add_weight(shape=(self.kernel_size[0], self.kernel_size[1], input_dim[-1], self.filters),
+                      name='kernel', regularizer=self.regularizer, initializer=self.initializer)
+        # Depending on whether there is fusion with batch normalization layer and its position with respect to ReLU activation function the processing in spiking convolutional layer can be different.
+        self.BN=tf.Variable(tf.constant([0]), name='BN', trainable=False)
+        self.BN_before_ReLU=tf.Variable(tf.constant([0]), name='BN_before_ReLU', trainable=False)
+        # When fusing a batch normalization layer with the next convolutional layer where padding=='same', some of the biases in scaled ReLU network are changed, leading to 9 different values.
+        self.D_i = self.add_weight(shape=(9, self.filters), initializer=tf.constant_initializer(0), name='D_i')
+        self.built = True
+    
+    def set_params(self, t_min_prev, t_min):
+        """
+        Set t_min_prev, t_min, t_max, J_ij (kernel) and vartheta_i (threshold) parameters of this layer. Alpha is fixed at 1.
+        """
+        self.t_min_prev=tf.Variable(tf.constant(t_min_prev, dtype=tf.float32), trainable=False, name='t_min_prev')
+        self.t_min=tf.Variable(tf.constant(t_min, dtype=tf.float32), trainable=False, name='t_min')
+        self.t_max=tf.Variable(tf.constant(t_min+self.B_n, dtype=tf.float32), trainable=False, name='t_max')
+        return t_min, t_min+self.B_n
 
     def call(self, tj):
-        output = call_spiking(tj, self.kernel, self.D_i, self.t_min_prev, self.t_min, self.t_max, self.robustness_params)
-        if self.outputLayer:
-            W_mult_x = tf.matmul(self.t_min - tj, self.kernel)
-            alpha = self.D_i / (self.t_min - self.t_min_prev + 1e-8)
-            output = alpha * (self.t_min - self.t_min_prev) + W_mult_x
-        return output
-
-class SpikingConv2D(tf.keras.layers.Layer):
-    def __init__(self, filters, kernel_size=(3,3), X_n=1, padding='same', dropout_rate=0.2, robustness_params={}, name=None):
-        super().__init__(name=name)
-        self.filters = filters
-        self.kernel_size = kernel_size
-        self.padding = padding
-        self.B_n = (1 + 0.5) * X_n
-        self.robustness_params = robustness_params
-        self.dropout = tf.keras.layers.Dropout(dropout_rate)
-
-    def build(self, input_shape):
-        in_channels = input_shape[-1]
-        self.kernel = self.add_weight(
-            shape=(self.kernel_size[0], self.kernel_size[1], in_channels, self.filters),
-            initializer='glorot_uniform',
-            trainable=True,
-            name='kernel',
-            regularizer=tf.keras.regularizers.l2(5e-4)
-        )
-        kernel_elems = self.kernel_size[0] * self.kernel_size[1] * in_channels
-        self.D_i = self.add_weight(
-            shape=(kernel_elems, self.filters),
-            initializer='zeros',
-            trainable=True,
-            name='D_i'
-        )
-        self.t_min_prev = tf.Variable(0.0, trainable=False)
-        self.t_min = tf.Variable(0.0, trainable=False)
-        self.t_max = tf.Variable(1.0, trainable=False)
-
-    def call(self, tj, training=None):
-        padding_size = self.kernel_size[0] // 2 if self.padding == 'same' else 0
-        image_size = tf.shape(tj)[1]
-        
-        tj = tf.pad(
-            tj,
-            [[0,0], [padding_size, padding_size], [padding_size, padding_size], [0,0]], 
-            constant_values=tf.cast(self.t_min.read_value(), tj.dtype)
-        )
-
-        tj_patches = tf.image.extract_patches(
-            tj, 
-            sizes=[1, self.kernel_size[0], self.kernel_size[1], 1],
-            strides=[1, 1, 1, 1], 
-            rates=[1, 1, 1, 1], 
-            padding='VALID'
-        )
-        
+        """
+        Input spiking times tj, output spiking times ti. 
+        """
+        # Image size in case of padding='same' or padding='valid'.
+        padding_size, image_same_size = int(self.padding=='same')*(self.kernel_size[0]//2), tf.shape(tj)[1] 
+        image_valid_size = image_same_size - self.kernel_size[0]+1
+        # Pad input with t_min value, which is equivalent with 0 in ReLU network.
+        tj=tf.pad(tj, tf.constant([[0, 0], [padding_size, padding_size,], [padding_size, padding_size], [0, 0]]), constant_values=self.t_min)
+        # Extract image patches of size (kernel_size, kernel_size). call_spiking function will be called for different patches in parallel.  
+        tj = tf.image.extract_patches(tj, sizes=[1, self.kernel_size[0], self.kernel_size[1], 1], strides=[1, 1, 1, 1], rates=[1, 1, 1, 1], padding='VALID')
+        # We reshape input and weights in order to utilize the same function as for the fully-connected layer.
         W = tf.reshape(self.kernel, (-1, self.filters))
-        tj_flat = tf.reshape(tj_patches, (-1, tf.shape(W)[0]))
-        ti = call_spiking(tj_flat, W, self.D_i[0], self.t_min_prev, self.t_min, self.t_max, self.robustness_params)
-        ti = tf.reshape(ti, (-1, image_size, image_size, self.filters))
+        if self.padding=='valid' or self.BN!=1 or self.BN_before_ReLU==1: 
+            # In this case the threshold is the same for whole input image.
+            tj = tf.reshape(tj, (-1, tf.shape(W)[0]))
+            ti = call_spiking(tj, W, self.D_i[0], self.t_min_prev, self.t_min, self.t_max, self.robustness_params)
+            # Layer output is reshaped back.
+            if self.padding=='valid':
+                ti = tf.reshape(ti, (-1, image_valid_size, image_valid_size, self.filters))
+            else:
+                ti = tf.reshape(ti, (-1, image_same_size, image_same_size, self.filters))
+        else:
+            # In this case there are 9 different thresholds for 9 different image partitions.
+            tj_partitioned = [tj[:, 1:-1, 1:-1, :], tj[:, :1, :1, :], tj[:, :1, 1:-1, :], tj[:, :1, -1:, :], tj[:, 1:-1, -1:, :], tj[:, -1:, -1:, :] , tj[:, -1:, 1:-1, :], tj[:, -1:, :1, :], tj[:, 1:-1, :1, :]]
+            ti_partitioned=[]
+            for i, tj_part in enumerate(tj_partitioned):
+                # Iterate over 9 different partitions and call call_spiking with different threshold value.
+                tj_part = tf.reshape(tj_part, (-1, tf.shape(W)[0]))
+                ti_part = call_spiking(tj_part, W, self.D_i[i], self.t_min_prev, self.t_min, self.t_max, self.robustness_params)
+                # Partitions are reshaped back.
+                if i==0: ti_part=tf.reshape(ti_part, (-1, image_valid_size, image_valid_size, self.filters))
+                if i in [1, 3, 5, 7]: ti_part=tf.reshape(ti_part, (-1, 1, 1, self.filters))
+                if i in [2, 6]: ti_part=tf.reshape(ti_part, (-1, 1, image_valid_size, self.filters))
+                if i in [4, 8]: ti_part=tf.reshape(ti_part, (-1, image_valid_size, 1, self.filters))
+                ti_partitioned.append(ti_part) 
+            # Partitions are concatenated to create a complete output.
+            if image_valid_size!=0:
+                ti_top_row = tf.concat([ti_partitioned[1], ti_partitioned[2], ti_partitioned[3]], axis=2)
+                ti_middle = tf.concat([ti_partitioned[8], ti_partitioned[0], ti_partitioned[4]], axis=2)
+                ti_bottom_row = tf.concat([ti_partitioned[7], ti_partitioned[6], ti_partitioned[5]], axis=2)
+                ti = tf.concat([ti_top_row, ti_middle, ti_bottom_row], axis=1)         
+            else:
+                ti_top_row = tf.concat([ti_partitioned[1], ti_partitioned[3]], axis=2)
+                ti_bottom_row = tf.concat([ti_partitioned[7], ti_partitioned[5]], axis=2)
+                ti = tf.concat([ti_top_row, ti_bottom_row], axis=1)   
         return ti
 
-class MaxMinPool2D(tf.keras.layers.Layer):
-    def __init__(self, pool_size=2):
-        super().__init__()
-        self.pool_size = pool_size
-    
-    def call(self, x):
-        x = tf.nn.max_pool2d(x, ksize=self.pool_size, strides=self.pool_size, padding='SAME')
-        return x
+
+
 
 class VGG_SNN(tf.keras.Model):
     def __init__(self, layers2D, kernel_size, layers1D, data, optimizer, robustness_params):
@@ -435,7 +508,7 @@ class VGG_SNN(tf.keras.Model):
         # Dense layers
         self.dense_1 = SpikingDense(512, X_n=1000, robustness_params=robustness_params, name='dense_1')
         self.dense_out = SpikingDense(
-            data.num_of_classes,
+            10,
             outputLayer=True,
             robustness_params=robustness_params,
             name='dense_out'
@@ -487,25 +560,7 @@ class VGG_SNN(tf.keras.Model):
 
         return out
 
-class SimpleSNN(tf.keras.Model):
-    """Simple SNN model for non-VGG architectures"""
-    def __init__(self, input_shape, num_classes, robustness_params={}):
-        super().__init__()
-        self.flatten = tf.keras.layers.Flatten()
-        self.dense1 = SpikingDense(128, X_n=1000, robustness_params=robustness_params, name='dense_1')
-        self.dense2 = SpikingDense(64, X_n=1000, robustness_params=robustness_params, name='dense_2')
-        self.output_layer = SpikingDense(
-            num_classes, 
-            outputLayer=True, 
-            robustness_params=robustness_params, 
-            name='dense_out'
-        )
 
-    def call(self, x, training=False):
-        x = self.flatten(x)
-        x = self.dense1(x)
-        x = self.dense2(x)
-        return self.output_layer(x)
 class SpikeMonitorCallback(tf.keras.callbacks.Callback):
     def __init__(self, log_dir, x_sample):
         super().__init__()
@@ -547,17 +602,17 @@ def create_model(args, data, optimizer, robustness_params):
         kernel_size = (3, 3)
         
         model = VGG_SNN(layers2D, kernel_size, layers1D, data, optimizer, robustness_params)
-# Initialize SNN timing parameters correctly
+        logging.info("#### Setting SNN intervals ####")
+        # Set parameters of SNN network: t_min_prev, t_min, t_max.
+        t_min, t_max = 0, 1  # for the input layer
+        for layer in model.layers:
+            if 'conv' in layer.name or 'dense' in layer.name:
+                t_min, t_max = layer.set_params(t_min, t_max)
         dummy_input = tf.random.normal((1,) + data.input_shape)
         _ = model(dummy_input)
-        for layer in model.conv_layers + model.dense_layers + [model.output_layer]:
-            if isinstance(layer, SpikingConv2D) or isinstance(layer, SpikingDense):
-                layer.t_min.assign(0.0)
-                layer.t_max.assign(1.0)
-                layer.t_min_prev.assign(0.0)
-                layer.D_i.assign(tf.zeros_like(layer.D_i))
 
-        # Try to load and transfer weights from ANN if available
+
+        # # Try to load and transfer weights from ANN if available
         weights_path = "cifar10vgg.h5"
         if os.path.exists(weights_path):
             try:
@@ -646,13 +701,21 @@ def main():
     logging.info("#### Creating the model ####")
     model = create_model(args, data, optimizer, robustness_params)
     
-    # Build model
-    if hasattr(data, 'input_shape'):
-        model.build(input_shape=(None,) + data.input_shape)
-    else:
-        # For flattened data
-        model.build(input_shape=(None, data.x_train.shape[1]))
+    # # Build model
+    # if hasattr(data, 'input_shape'):
+    #     model.build(input_shape=(None,) + data.input_shape)
+    # else:
+    #     # For flattened data
+    #     model.build(input_shape=(None, data.x_train.shape[1]))
     
+
+    if hasattr(data, 'input_shape'):
+        dummy_input = tf.zeros((1,) + data.input_shape, dtype=tf.float32)
+    else:
+        dummy_input = tf.zeros((1, data.x_train.shape[1]), dtype=tf.float32)
+
+    _ = model(dummy_input)
+
     model.summary()
 
     # Enable eager execution for debugging if needed
