@@ -9,7 +9,7 @@ import datetime
 import numpy as np
 import pickle as pkl
 import tensorflow as tf
-
+from apps import *
 from tensorflow.keras.callbacks import Callback, TensorBoard, ModelCheckpoint
 from tensorflow.keras.losses import CategoricalCrossentropy
 from tensorflow.keras.optimizers import Adam, SGD
@@ -154,6 +154,7 @@ def parse_arguments():
     parser.add_argument('--save', type=strtobool, default=True, help='Save model after training')
     parser.add_argument('--load', type=str, default='False', help='Load pre-trained weights')
     parser.add_argument('--findMax', type=strtobool, default=False, help='Find maximum activations per layer')
+    parser.add_argument('--fused', type=strtobool, default=True, help='Find maximum activations per layer')
 
     # Robustness parameters
     parser.add_argument('--noise', type=float, default=0.0, help='Noise std.dev.')
@@ -601,6 +602,8 @@ class SpikeMonitorCallback(tf.keras.callbacks.Callback):
 # ==============================
 # MODEL CREATION FUNCTION
 # ==============================
+
+
 def create_model(args, data, optimizer, robustness_params):
     """Create appropriate model based on arguments"""
     
@@ -622,12 +625,17 @@ def create_model(args, data, optimizer, robustness_params):
         _ = model(dummy_input)
 
 
-        # # Try to load and transfer weights from ANN if available
+    
         weights_path = "cifar10vgg.h5"
         if os.path.exists(weights_path):
-            try:
-            # Load ANN (ReLU) VGG16
+    
                 model_ann = VGG16(input_shape=data.input_shape, classes=10, weights_path=weights_path)
+            
+                fused_model = fuse_bn(model_ann, BN='BN', p=-3.0, q=3.0, optimizer=optimizer)
+                logging.info(fused_model.summary())
+
+
+
                 print("[INFO] ANN weights loaded successfully")
 
                 # Build SNN model with dummy input
@@ -650,8 +658,7 @@ def create_model(args, data, optimizer, robustness_params):
 
                 print("[INFO] ANN → SNN weight transfer complete")
 
-            except Exception as e:
-                print(f"[WARNING] Could not transfer ANN weights: {e}")
+        
         else:
             print("[INFO] No pretrained ANN weights found, training from scratch")
                     
