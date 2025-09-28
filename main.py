@@ -633,10 +633,32 @@ def create_model(args, data, optimizer, robustness_params):
             
                 fused_model = fuse_bn(model_ann, BN='BN', p=-3.0, q=3.0, optimizer=optimizer)
                 logging.info(fused_model.summary())
+                logging.info('calculating maximum layer output...')
+                layer_num, X_n = 0, []
+                layers_max = []
+                for k, layer in enumerate(fused_model.layers):
+                    if 'conv' in layer.name or 'dense' in layer.name:
+                        if k!=len(fused_model.layers)-2:
+                            # Calculate X_n of the current layer.
+                            layers_max.append(tf.reduce_max(tf.nn.relu(layer.output)))
 
-
-
+                extractor = tf.keras.Model(inputs=fused_model.inputs, outputs=layers_max)
+                output = extractor.predict(data.x_train, batch_size=args.batch_size, verbose=1)
+                X_n = list(map(lambda x: np.max(x), output))
+                logging.info('X_n: %s', X_n)
+                pkl.dump(X_n, open(args.logging_dir + '/' + args.model_name + '_X_n.pkl', 'wb'))
                 print("[INFO] ANN weights loaded successfully")
+
+
+
+
+
+
+
+
+
+
+
 
                 # Build SNN model with dummy input
                 dummy_input = tf.random.normal((1,) + data.input_shape)
