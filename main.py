@@ -148,8 +148,8 @@ def parse_arguments():
     parser.add_argument('--weight_dir', type=str, default='./weights/', help='Directory for logging')
     parser.add_argument('--model_type', type=str, default='SNN', help='Model type: SNN | ReLU')
     parser.add_argument('--model_name', type=str, default='BN', help='Model name (contains FC2 or VGG)')
-    parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate')
-    parser.add_argument('--batch_size', type=int, default=128, help='Batch size')
+    parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate')
+    parser.add_argument('--batch_size', type=int, default=20, help='Batch size')
     parser.add_argument('--epochs', type=int, default=1, help='Number of training epochs')
     parser.add_argument('--training', type=strtobool, default=True, help='Enable training mode')
     parser.add_argument('--testing', type=strtobool, default=False, help='Enable testing mode')
@@ -337,46 +337,46 @@ class MaxMinPool2D(tf.keras.layers.MaxPool2D):
 def call_spiking(tj, W, D_i, t_min_prev, t_min, t_max, robustness_params):
     """
     Calculates spiking times from which ReLU functionality can be recovered.
+    FIXED: Preserves variability across layers
     """
-    # if robustness_params['time_bits'] != 0:
-    #     tj = t_min_prev+tf.quantization.fake_quant_with_min_max_args(tf.cast(tj-t_min_prev, dtype=tf.float32),
-    #         min=t_min_prev, max=t_min, num_bits=robustness_params['time_bits'])
-    #     tj = tf.cast(tj, tf.float64)
-    # if robustness_params['weight_bits'] != 0:
-    #     W = tf.quantization.fake_quant_with_min_max_args(tf.cast(W, dtype=tf.float32),
-    #         min=robustness_params['w_min'], max=robustness_params['w_max'], num_bits=robustness_params['weight_bits'])
-    #     W = tf.cast(W, tf.float64)
-
     # Calculate the weighted input sum
     weighted_input = tf.matmul(tj - t_min, W)
     
     # Calculate the range of possible spike times
     time_range = t_max - t_min
     
-    # NEW: Normalize per neuron (across batch dimension)
-    # Get max absolute value for each neuron across the batch
-    max_per_neuron = tf.reduce_max(tf.abs(weighted_input), axis=0, keepdims=True)  # shape: (1, 64)
+    # FIX: Use gentle normalization instead of aggressive max normalization
+    # Calculate robust statistics across the entire weighted input
+    mean_input = tf.reduce_mean(weighted_input, axis=0, keepdims=True)
+    std_input = tf.math.reduce_std(weighted_input, axis=0, keepdims=True)
     
     # Avoid division by zero
-    max_per_neuron = tf.maximum(max_per_neuron, 1e-8)
+    std_input = tf.maximum(std_input, 1e-8)
     
-    # Normalize each neuron independently
-    normalized_input = weighted_input / max_per_neuron * time_range
+    # FIX: Use z-score normalization with controlled scaling
+    # This preserves relative differences while preventing explosion
+    normalized_input = (weighted_input - mean_input) / std_input
     
-    # Calculate spike time: earlier spikes for stronger inputs
-    ti = t_max - normalized_input - D_i
+    # FIX: Scale to use only a portion of the time range to prevent saturation
+    # Use hyperbolic tangent to smoothly map to the time range
+    scaled_input = tf.tanh(normalized_input / 3.0)  # Division by 3 keeps most values in reasonable range
+    
+    # FIX: Map to spike times with better distribution
+    # Center in the time range and subtract thresholds
+    ti = t_min + (time_range / 2.0) * (1.0 - scaled_input) - D_i
+    
+    # Alternative simpler approach if above is too complex:
+    # ti = t_max - tf.nn.softplus(weighted_input / std_input) * (time_range / 4.0) - D_i
     
     # Ensure valid spiking time in [t_min, t_max]
     ti = tf.clip_by_value(ti, t_min, t_max)
     
-    # Add noise to the spiking time for noise simulations
-    # ti = ti + tf.random.normal(tf.shape(ti), stddev=robustness_params['noise'], dtype=ti.dtype)
     return ti
 class SpikingDense(tf.keras.layers.Layer):
     def __init__(self, units, name, X_n=1, outputLayer=False, robustness_params={}, input_dim=None,
                  kernel_regularizer=None, kernel_initializer=None):
         self.units = units
-        self.B_n = (1 + 0.5) * X_n
+        self.B_n = (2 ) * X_n
         self.outputLayer=outputLayer
         self.t_min_prev, self.t_min, self.t_max=0, 0, 1
         self.robustness_params=robustness_params
@@ -426,7 +426,7 @@ class SpikingConv2D(tf.keras.layers.Layer):
         self.padding=padding
         self.regularizer = kernel_regularizer
         self.initializer = kernel_initializer
-        self.B_n = (1 + 0.5) * X_n
+        self.B_n = (2 ) * X_n
         self.t_min_prev, self.t_min, self.t_max=0, 0, 1
         self.robustness_params=robustness_params
         self.alpha = tf.cast(tf.fill((filters, ), 1), dtype=tf.float64)
@@ -696,7 +696,7 @@ class VGG_SNN(tf.keras.Model):
         layer_names.append("dense_out")
         
         # Plot all histograms
-        plot_all_spike_histograms(layer_outputs, layer_names)
+        # plot_all_spike_histograms(layer_outputs, layer_names)
     
         # -----------------------------
         # Forward pass through conv layers
@@ -1029,13 +1029,21 @@ def main():
 
         spike_monitor_cb = SpikeMonitorCallback(log_dir=os.path.join("logs", args.model_name), x_sample=x_sample)
 
+        train_subset = min(10000, len(data.x_train))
+        test_subset = min(10000, len(data.x_test))
+        
+
+       
         history = model.fit(
-            data.x_train,
-            data.y_train,
+                 data.x_train[:train_subset],
+            data.y_train[:train_subset],
+            # data.x_train,
+            # data.y_train,
             batch_size=args.batch_size,
             epochs=args.epochs,
             validation_data=(data.x_test, data.y_test),
             callbacks=[tensorboard_cb, save_cb, checkpoint_cb, spike_monitor_cb],
+            # callbacks=[tensorboard_cb, save_cb, checkpoint_cb, spike_monitor_cb],
             verbose=1
         )
 
