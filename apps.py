@@ -174,50 +174,40 @@ def fuse_bn(model, p, q, optimizer, BN = True, BN_before_ReLU = True):
         Transforms MaxPooling layers in MaxMinPooling layers and Conv2D layers in Conv2DWithBias.  
     """
     fused_model = tf.keras.Sequential()
-    # Add input layer.
     fused_model.add(copy_layer(model.layers[0]))
     i=1
-    # If condition is satisfied, there is an imaginary batch normalization layer which is merged.
-    # if not (p==0 and q==1): i = fuse_imaginary_bn(fused_model, model, p, q)
-    # if not (p == 0 and q == 1):
-    #     i = fuse_imaginary_bn(fused_model, model, p, q)
 
 
     if BN:
-        # There are batch normalization layers.
         if BN_before_ReLU:
-            # Batch normalization layers are always found before ReLU activation function.
             while i<len(model.layers):
                 if 'batch_norm' in model.layers[i].name:
-                    # Fuse this batch normalization layer with previous convolutional or fully-connected layer. 
                     i = fuse_bn_before_activation(fused_model, model, i)
                 if i==(len(model.layers)-1):
-                    # Add last Dense layer with 'softmax'.
-                    layer = copy_layer(model.layers[-2])
-                    layer.set_weights(model.layers[-2].get_weights())
+                    layer = copy_layer(model.layers[-1])
+                    layer.set_weights(model.layers[-1].get_weights())
                     fused_model.add(layer)
-                    fused_model.add(copy_layer(model.layers[-1]))
                 i+=1
-        else:
+        # else:
             # Batch normalization layers are always found after ReLU activation function.
-            while i<len(model.layers): 
-                # Add first Dense or Convolutional layer if there was no imaginary batch normalization.
-                if (p==0 and q==1) and i==1:
-                    layer = copy_layer(model.layers[1])
-                    if 'conv' in model.layers[1].name:
-                        kernel, bias = model.layers[1].get_weights()
-                        # Set BN flag to 0 and BN_before_ReLU to 0.
-                        layer.set_weights([kernel, np.array([0]), np.array([0])])
-                        # Bias is same for all locations.
-                        layer.set_bias(bias)
-                    else:
-                        layer.set_weights(model.layers[1].get_weights())
-                    fused_model.add(layer)
-                    fused_model.add(copy_layer(model.layers[2]))
-                if 'batch_norm' in model.layers[i].name:
-                    # Fuse this batch normalization layer with next convolutional or fully-connected layer.
-                    i = fuse_bn_after_activation(fused_model, model, i)
-                i+=1
+            # while i<len(model.layers): 
+            #     # Add first Dense or Convolutional layer if there was no imaginary batch normalization.
+            #     if (p==0 and q==1) and i==1:
+            #         layer = copy_layer(model.layers[1])
+            #         if 'conv' in model.layers[1].name:
+            #             kernel, bias = model.layers[1].get_weights()
+            #             # Set BN flag to 0 and BN_before_ReLU to 0.
+            #             layer.set_weights([kernel, np.array([0]), np.array([0])])
+            #             # Bias is same for all locations.
+            #             layer.set_bias(bias)
+            #         else:
+            #             layer.set_weights(model.layers[1].get_weights())
+            #         fused_model.add(layer)
+            #         fused_model.add(copy_layer(model.layers[2]))
+            #     if 'batch_norm' in model.layers[i].name:
+            #         # Fuse this batch normalization layer with next convolutional or fully-connected layer.
+            #         i = fuse_bn_after_activation(fused_model, model, i)
+            #     i+=1
     else:
         # If there is no batch normalization layers, copy model such that Conv2D and MaxPooling layers are replaced with ConvWithBias and MaxMinPooling respectively. 
         copy_model(fused_model, model, i)
@@ -292,7 +282,7 @@ def fuse_bn_before_activation(fused_model, model, i):
         i+=1
     return i+1
 
-        
+
 def fuse_bn_after_activation(fused_model, model, i): 
     """
     Fuse batch normalization with following layer.

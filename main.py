@@ -16,6 +16,7 @@ from tensorflow.keras.optimizers import Adam, SGD
 from tensorflow.keras.models import Model, Sequential
 from tensorflow.keras.layers import Lambda, Input, Conv2D, BatchNormalization, Activation, Dropout, MaxPooling2D, Flatten, Dense
 from tensorflow.keras import regularizers
+import numpy as np
 
 
 import logging
@@ -144,6 +145,7 @@ def parse_arguments():
 
     parser.add_argument('--data_name', type=str, default='MNIST', help='Dataset: MNIST | CIFAR10 | CIFAR100')
     parser.add_argument('--logging_dir', type=str, default='./logs/', help='Directory for logging')
+    parser.add_argument('--weight_dir', type=str, default='./weights/', help='Directory for logging')
     parser.add_argument('--model_type', type=str, default='SNN', help='Model type: SNN | ReLU')
     parser.add_argument('--model_name', type=str, default='BN', help='Model name (contains FC2 or VGG)')
     parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate')
@@ -152,9 +154,9 @@ def parse_arguments():
     parser.add_argument('--training', type=strtobool, default=True, help='Enable training mode')
     parser.add_argument('--testing', type=strtobool, default=False, help='Enable testing mode')
     parser.add_argument('--save', type=strtobool, default=True, help='Save model after training')
-    parser.add_argument('--load', type=str, default='False', help='Load pre-trained weights')
+    parser.add_argument('--load', type=str, default=True, help='Load pre-trained weights')
     parser.add_argument('--findMax', type=strtobool, default=False, help='Find maximum activations per layer')
-    parser.add_argument('--fused', type=strtobool, default=True, help='Find maximum activations per layer')
+    parser.add_argument('--plotExample', type=strtobool, default=False, help='Find maximum activations per layer')
 
     # Robustness parameters
     parser.add_argument('--noise', type=float, default=0.0, help='Noise std.dev.')
@@ -307,29 +309,71 @@ class MaxMinPool2D(tf.keras.layers.MaxPool2D):
 
 
 
+# def call_spiking(tj, W, D_i, t_min_prev, t_min, t_max, robustness_params):
+#     """
+#     Calculates spiking times from which ReLU functionality can be recovered.
+#     Assumes tau_c=1 and B_i^(n)=1
+#     """
+#     if robustness_params['time_bits'] != 0:
+#         tj = t_min_prev+tf.quantization.fake_quant_with_min_max_args(tf.cast(tj-t_min_prev, dtype=tf.float32),
+#             min=t_min_prev, max=t_min, num_bits=robustness_params['time_bits'])
+#         tj = tf.cast(tj, tf.float64)
+#     if robustness_params['weight_bits'] != 0:
+#         W = tf.quantization.fake_quant_with_min_max_args(tf.cast(W, dtype=tf.float32),
+#             min=robustness_params['w_min'], max=robustness_params['w_max'], num_bits=robustness_params['weight_bits'])
+#         W = tf.cast(W, tf.float64)
+
+#     # Calculate the spiking threshold (Eq. 18)
+#     threshold = t_max - t_min - D_i
+#     # Calculate output spiking time ti (Eq. 7)
+#     ti = (tf.matmul(tj-t_min, W) + threshold + t_min)
+#     # Ensure valid spiking time. Do not spike for ti >= t_max.
+#     # No spike is modelled as t_max that cancels out in the next layer (tj-t_min) as t_min there is t_max
+#     ti = tf.where(ti < t_max, ti, t_max)
+#     # Add noise to the spiking time for noise simulations
+#     ti = ti + tf.random.normal(tf.shape(ti), stddev=robustness_params['noise'], dtype=ti.dtype)
+#     return ti
+
 def call_spiking(tj, W, D_i, t_min_prev, t_min, t_max, robustness_params):
     """
     Calculates spiking times from which ReLU functionality can be recovered.
     Assumes tau_c=1 and B_i^(n)=1
     """
-    if robustness_params['time_bits'] != 0:
-        tj = t_min_prev+tf.quantization.fake_quant_with_min_max_args(tf.cast(tj-t_min_prev, dtype=tf.float32),
-            min=t_min_prev, max=t_min, num_bits=robustness_params['time_bits'])
-        tj = tf.cast(tj, tf.float64)
-    if robustness_params['weight_bits'] != 0:
-        W = tf.quantization.fake_quant_with_min_max_args(tf.cast(W, dtype=tf.float32),
-            min=robustness_params['w_min'], max=robustness_params['w_max'], num_bits=robustness_params['weight_bits'])
-        W = tf.cast(W, tf.float64)
+    # if robustness_params['time_bits'] != 0:
+    #     tj = t_min_prev+tf.quantization.fake_quant_with_min_max_args(tf.cast(tj-t_min_prev, dtype=tf.float32),
+    #         min=t_min_prev, max=t_min, num_bits=robustness_params['time_bits'])
+    #     tj = tf.cast(tj, tf.float64)
+    # if robustness_params['weight_bits'] != 0:
+    #     W = tf.quantization.fake_quant_with_min_max_args(tf.cast(W, dtype=tf.float32),
+    #         min=robustness_params['w_min'], max=robustness_params['w_max'], num_bits=robustness_params['weight_bits'])
+    #     W = tf.cast(W, tf.float64)
 
-    # Calculate the spiking threshold (Eq. 18)
-    threshold = t_max - t_min - D_i
-    # Calculate output spiking time ti (Eq. 7)
-    ti = (tf.matmul(tj-t_min, W) + threshold + t_min)
-    # Ensure valid spiking time. Do not spike for ti >= t_max.
-    # No spike is modelled as t_max that cancels out in the next layer (tj-t_min) as t_min there is t_max
-    ti = tf.where(ti < t_max, ti, t_max)
+    # Calculate the weighted input sum (pre-synaptic contribution)
+    weighted_input = tf.matmul(tj - t_min, W)
+    
+    # NEW: Normalize the weighted input to better distribute spike times
+    # Calculate the range of possible spike times
+    time_range = t_max - t_min
+    
+    # Calculate output spiking time ti with better distribution
+    # Instead of adding threshold directly, scale the weighted input to fit the time range
+    max_weighted = tf.reduce_max(tf.abs(weighted_input))
+    if max_weighted > 0:
+        normalized_input = weighted_input / max_weighted * time_range
+    else:
+        normalized_input = weighted_input
+    
+    # Calculate spike time: earlier spikes for stronger inputs
+    ti = t_max - normalized_input - D_i
+    
+    # Alternative approach: Direct mapping with scaling
+    # ti = t_min + (time_range - D_i) * tf.sigmoid(-weighted_input / time_range) * time_range
+    
+    # Ensure valid spiking time in [t_min, t_max]
+    ti = tf.clip_by_value(ti, t_min, t_max)
+    
     # Add noise to the spiking time for noise simulations
-    ti = ti + tf.random.normal(tf.shape(ti), stddev=robustness_params['noise'], dtype=ti.dtype)
+    # ti = ti + tf.random.normal(tf.shape(ti), stddev=robustness_params['noise'], dtype=ti.dtype)
     return ti
 
 class SpikingDense(tf.keras.layers.Layer):
@@ -463,43 +507,43 @@ class SpikingConv2D(tf.keras.layers.Layer):
 
 
 class VGG_SNN(tf.keras.Model):
-    def __init__(self, layers2D, kernel_size, layers1D, data, optimizer, robustness_params):
+    def __init__(self,X_n, layers2D, kernel_size, layers1D, data, optimizer, robustness_params):
         super().__init__()
 
         # Convolutional layers
-        self.conv_1 = SpikingConv2D(64, kernel_size=(3,3), X_n=1000,
+        self.conv_1 = SpikingConv2D(64, kernel_size=(3,3), X_n=X_n[0],
                                     robustness_params=robustness_params, name='conv_1')
-        self.conv_2 = SpikingConv2D(64, kernel_size=(3,3), X_n=1000,
+        self.conv_2 = SpikingConv2D(64, kernel_size=(3,3), X_n=X_n[1],
                                     robustness_params=robustness_params, name='conv_2')
         self.pool_1 = MaxMinPool2D(pool_size=2)
 
-        self.conv_3 = SpikingConv2D(128, kernel_size=(3,3), X_n=1000,
+        self.conv_3 = SpikingConv2D(128, kernel_size=(3,3), X_n=X_n[2],
                                     robustness_params=robustness_params, name='conv_3')
-        self.conv_4 = SpikingConv2D(128, kernel_size=(3,3), X_n=1000,
+        self.conv_4 = SpikingConv2D(128, kernel_size=(3,3), X_n=X_n[3],
                                     robustness_params=robustness_params, name='conv_4')
         self.pool_2 = MaxMinPool2D(pool_size=2)
 
-        self.conv_5 = SpikingConv2D(256, kernel_size=(3,3), X_n=1000,
+        self.conv_5 = SpikingConv2D(256, kernel_size=(3,3), X_n=X_n[4],
                                     robustness_params=robustness_params, name='conv_5')
-        self.conv_6 = SpikingConv2D(256, kernel_size=(3,3), X_n=1000,
+        self.conv_6 = SpikingConv2D(256, kernel_size=(3,3), X_n=X_n[5],
                                     robustness_params=robustness_params, name='conv_6')
-        self.conv_7 = SpikingConv2D(256, kernel_size=(3,3), X_n=1000,
+        self.conv_7 = SpikingConv2D(256, kernel_size=(3,3), X_n=X_n[6],
                                     robustness_params=robustness_params, name='conv_7')
         self.pool_3 = MaxMinPool2D(pool_size=2)
 
-        self.conv_8 = SpikingConv2D(512, kernel_size=(3,3), X_n=1000,
+        self.conv_8 = SpikingConv2D(512, kernel_size=(3,3), X_n=X_n[7],
                                     robustness_params=robustness_params, name='conv_8')
-        self.conv_9 = SpikingConv2D(512, kernel_size=(3,3), X_n=1000,
+        self.conv_9 = SpikingConv2D(512, kernel_size=(3,3), X_n=X_n[8],
                                     robustness_params=robustness_params, name='conv_9')
-        self.conv_10 = SpikingConv2D(512, kernel_size=(3,3), X_n=1000,
+        self.conv_10 = SpikingConv2D(512, kernel_size=(3,3), X_n=X_n[9],
                                      robustness_params=robustness_params, name='conv_10')
         self.pool_4 = MaxMinPool2D(pool_size=2)
 
-        self.conv_11 = SpikingConv2D(512, kernel_size=(3,3), X_n=1000,
+        self.conv_11 = SpikingConv2D(512, kernel_size=(3,3), X_n=X_n[10],
                                      robustness_params=robustness_params, name='conv_11')
-        self.conv_12 = SpikingConv2D(512, kernel_size=(3,3), X_n=1000,
+        self.conv_12 = SpikingConv2D(512, kernel_size=(3,3), X_n=X_n[11],
                                      robustness_params=robustness_params, name='conv_12')
-        self.conv_13 = SpikingConv2D(512, kernel_size=(3,3), X_n=1000,
+        self.conv_13 = SpikingConv2D(512, kernel_size=(3,3), X_n=X_n[12],
                                      robustness_params=robustness_params, name='conv_13')
         self.pool_5 = MaxMinPool2D(pool_size=2)
 
@@ -507,9 +551,10 @@ class VGG_SNN(tf.keras.Model):
         self.flatten = tf.keras.layers.Flatten()
 
         # Dense layers
-        self.dense_1 = SpikingDense(512, X_n=1000, robustness_params=robustness_params, name='dense_1')
+        self.dense_1 = SpikingDense(512, X_n=X_n[13], robustness_params=robustness_params, name='dense_1')
         self.dense_out = SpikingDense(
             10,
+            X_n=X_n[14],
             outputLayer=True,
             robustness_params=robustness_params,
             name='dense_out'
@@ -613,14 +658,18 @@ def create_model(args, data, optimizer, robustness_params):
                     512, 512, 512, 'pool']
         layers1D = [512]
         kernel_size = (3, 3)
-        
-        model = VGG_SNN(layers2D, kernel_size, layers1D, data, optimizer, robustness_params)
+
+        if args.load:
+            X_n=pkl.load(open(args.weight_dir + args.data_name + '_X_n.pkl', 'rb'))
+            logging.info("#### Loading X_n ####", X_n)
+        model = VGG_SNN(X_n, layers2D, kernel_size, layers1D, data, optimizer, robustness_params)
         logging.info("#### Setting SNN intervals ####")
         # Set parameters of SNN network: t_min_prev, t_min, t_max.
         t_min, t_max = 0, 1  # for the input layer
         for layer in model.layers:
             if 'conv' in layer.name or 'dense' in layer.name:
                 t_min, t_max = layer.set_params(t_min, t_max)
+                logging.info(f"#### Setting parms {layer.name} , t_min:{t_min}, t_max:{t_max} ####")
         dummy_input = tf.random.normal((1,) + data.input_shape)
         _ = model(dummy_input)
 
@@ -632,21 +681,67 @@ def create_model(args, data, optimizer, robustness_params):
                 model_ann = VGG16(input_shape=data.input_shape, classes=10, weights_path=weights_path)
             
                 fused_model = fuse_bn(model_ann, BN='BN', p=-3.0, q=3.0, optimizer=optimizer)
-                logging.info(fused_model.summary())
-                logging.info('calculating maximum layer output...')
-                layer_num, X_n = 0, []
-                layers_max = []
-                for k, layer in enumerate(fused_model.layers):
-                    if 'conv' in layer.name or 'dense' in layer.name:
-                        if k!=len(fused_model.layers)-2:
-                            # Calculate X_n of the current layer.
-                            layers_max.append(tf.reduce_max(tf.nn.relu(layer.output)))
+                # logging.info(fused_model.summary())
+                if args.plotExample:
+                    import numpy as np
+                    import matplotlib.pyplot as plt
 
-                extractor = tf.keras.Model(inputs=fused_model.inputs, outputs=layers_max)
-                output = extractor.predict(data.x_train, batch_size=args.batch_size, verbose=1)
-                X_n = list(map(lambda x: np.max(x), output))
-                logging.info('X_n: %s', X_n)
-                pkl.dump(X_n, open(args.logging_dir + '/' + args.model_name + '_X_n.pkl', 'wb'))
+                    # ✅ Pick a sample from test data
+                    idx = 0  # or random.randint(0, len(data.x_test)-1)
+                    x_sample = data.x_test[idx]
+                    y_true = data.y_test[idx]
+
+                    # ✅ Ensure correct batch shape
+                    x_input = np.expand_dims(x_sample, axis=0)
+
+                    # ✅ Get predictions
+                    # Predictions
+                    pred_ann = model_ann.predict(x_input)
+                    pred_fused = fused_model.predict(x_input)
+
+                    # Flatten if needed
+                    pred_ann_flat = np.ravel(pred_ann)
+                    pred_fused_flat = np.ravel(pred_fused)
+
+                    # Labels
+                    label_ann = np.argmax(pred_ann_flat)
+                    label_fused = np.argmax(pred_fused_flat)
+                    true_label = np.argmax(y_true) if y_true.ndim > 0 else y_true
+
+                    # Plot
+                    plt.figure(figsize=(8, 4))
+                    plt.subplot(1, 2, 1)
+                    plt.imshow(x_sample.squeeze(), cmap='gray' if x_sample.shape[-1] == 1 else None)
+                    plt.title(f"Original Image\nTrue: {true_label}")
+                    plt.axis("off")
+
+                    plt.subplot(1, 2, 2)
+                    plt.bar(range(10), pred_ann_flat, alpha=0.5, label="ANN", width=0.4)
+                    plt.bar(np.arange(10)+0.4, pred_fused_flat, alpha=0.5, label="Fused", width=0.4)
+                    plt.xticks(range(10))
+                    plt.title(f"Predictions\nANN: {label_ann} | Fused: {label_fused}")
+                    plt.legend()
+                    plt.tight_layout()
+                    plt.show()
+
+                if args.findMax:
+                    logging.info('calculating maximum layer output...')
+                    layer_num, X_n = 0, []
+                    layers_max = []
+                    for k, layer in enumerate(fused_model.layers):
+                        if 'conv' in layer.name or 'dense' in layer.name:
+                            if k!=len(fused_model.layers)-2:
+                                # Calculate X_n of the current layer.
+                                layers_max.append(tf.reduce_max(tf.nn.relu(layer.output)))
+
+                    extractor = tf.keras.Model(inputs=fused_model.inputs, outputs=layers_max)
+                    output = extractor.predict(data.x_train, batch_size=args.batch_size, verbose=1)
+                    import numpy as np
+
+                    X_n = list(map(lambda x: np.max(x), output))
+                    logging.info('X_n: %s', X_n)
+                    pkl.dump(X_n, open(args.weight_dir + args.data_name + '_X_n.pkl', 'wb'))
+                    logging.info('saved maximum layer output')
                 print("[INFO] ANN weights loaded successfully")
 
 
@@ -680,6 +775,8 @@ def create_model(args, data, optimizer, robustness_params):
 
                 print("[INFO] ANN → SNN weight transfer complete")
 
+
+ 
         
         else:
             print("[INFO] No pretrained ANN weights found, training from scratch")
@@ -755,7 +852,7 @@ def main():
 
     _ = model(dummy_input)
 
-    model.summary()
+    # model.summary()
 
     # Enable eager execution for debugging if needed
     if args.training and ('SNN' in args.model_type):
