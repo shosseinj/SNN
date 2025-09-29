@@ -337,7 +337,6 @@ class MaxMinPool2D(tf.keras.layers.MaxPool2D):
 def call_spiking(tj, W, D_i, t_min_prev, t_min, t_max, robustness_params):
     """
     Calculates spiking times from which ReLU functionality can be recovered.
-    Assumes tau_c=1 and B_i^(n)=1
     """
     # if robustness_params['time_bits'] != 0:
     #     tj = t_min_prev+tf.quantization.fake_quant_with_min_max_args(tf.cast(tj-t_min_prev, dtype=tf.float32),
@@ -348,26 +347,24 @@ def call_spiking(tj, W, D_i, t_min_prev, t_min, t_max, robustness_params):
     #         min=robustness_params['w_min'], max=robustness_params['w_max'], num_bits=robustness_params['weight_bits'])
     #     W = tf.cast(W, tf.float64)
 
-    # Calculate the weighted input sum (pre-synaptic contribution)
+    # Calculate the weighted input sum
     weighted_input = tf.matmul(tj - t_min, W)
     
-    # NEW: Normalize the weighted input to better distribute spike times
     # Calculate the range of possible spike times
     time_range = t_max - t_min
     
-    # Calculate output spiking time ti with better distribution
-    # Instead of adding threshold directly, scale the weighted input to fit the time range
-    max_weighted = tf.reduce_max(tf.abs(weighted_input))
-    if max_weighted > 0:
-        normalized_input = weighted_input / max_weighted * time_range
-    else:
-        normalized_input = weighted_input
+    # NEW: Normalize per neuron (across batch dimension)
+    # Get max absolute value for each neuron across the batch
+    max_per_neuron = tf.reduce_max(tf.abs(weighted_input), axis=0, keepdims=True)  # shape: (1, 64)
+    
+    # Avoid division by zero
+    max_per_neuron = tf.maximum(max_per_neuron, 1e-8)
+    
+    # Normalize each neuron independently
+    normalized_input = weighted_input / max_per_neuron * time_range
     
     # Calculate spike time: earlier spikes for stronger inputs
     ti = t_max - normalized_input - D_i
-    
-    # Alternative approach: Direct mapping with scaling
-    # ti = t_min + (time_range - D_i) * tf.sigmoid(-weighted_input / time_range) * time_range
     
     # Ensure valid spiking time in [t_min, t_max]
     ti = tf.clip_by_value(ti, t_min, t_max)
@@ -375,7 +372,6 @@ def call_spiking(tj, W, D_i, t_min_prev, t_min, t_max, robustness_params):
     # Add noise to the spiking time for noise simulations
     # ti = ti + tf.random.normal(tf.shape(ti), stddev=robustness_params['noise'], dtype=ti.dtype)
     return ti
-
 class SpikingDense(tf.keras.layers.Layer):
     def __init__(self, units, name, X_n=1, outputLayer=False, robustness_params={}, input_dim=None,
                  kernel_regularizer=None, kernel_initializer=None):
@@ -503,7 +499,34 @@ class SpikingConv2D(tf.keras.layers.Layer):
                 ti = tf.concat([ti_top_row, ti_bottom_row], axis=1)   
         return ti
 
-
+import matplotlib.pyplot as plt
+import numpy as np
+def plot_all_spike_histograms(layers_data, layer_names):
+    """Plot histograms for all layers in a single figure"""
+    n_layers = len(layers_data)
+    n_cols = 3
+    n_rows = (n_layers + n_cols - 1) // n_cols
+    
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 5*n_rows))
+    axes = axes.flatten() if n_layers > 1 else [axes]
+    
+    for i, (layer_data, layer_name) in enumerate(zip(layers_data, layer_names)):
+        data_np = layer_data.numpy().flatten()
+        
+        axes[i].hist(data_np, bins=50, alpha=0.7, edgecolor='black', density=True)
+        axes[i].set_xlabel('Spike Time')
+        axes[i].set_ylabel('Density')
+        axes[i].set_title(f'{layer_name}\n'
+                         f'Min: {np.min(data_np):.3f}, Max: {np.max(data_np):.3f}\n'
+                         f'Mean: {np.mean(data_np):.3f}, Std: {np.std(data_np):.3f}')
+        axes[i].grid(True, alpha=0.3)
+    
+    # Hide unused subplots
+    for i in range(n_layers, len(axes)):
+        axes[i].set_visible(False)
+    
+    plt.tight_layout()
+    plt.show()
 
 
 class VGG_SNN(tf.keras.Model):
@@ -580,39 +603,134 @@ class VGG_SNN(tf.keras.Model):
         x = t_min + (1.0 - x) * (t_max - t_min)
     # ensure valid spike times
 
+        layer_outputs = []
+        layer_names = []
+        
         # -----------------------------
         # Forward pass through conv layers
         # -----------------------------
         x = self.conv_1(x)
-   
+        layer_outputs.append(x)
+        layer_names.append("conv_1")
+        
         x = self.conv_2(x)
+        layer_outputs.append(x)
+        layer_names.append("conv_2")
+        
         x = self.pool_1(x)
-
+        layer_outputs.append(x)
+        layer_names.append("pool_1")
+        
         x = self.conv_3(x)
+        layer_outputs.append(x)
+        layer_names.append("conv_3")
+        
         x = self.conv_4(x)
+        layer_outputs.append(x)
+        layer_names.append("conv_4")
+        
         x = self.pool_2(x)
-
+        layer_outputs.append(x)
+        layer_names.append("pool_2")
+        
         x = self.conv_5(x)
+        layer_outputs.append(x)
+        layer_names.append("conv_5")
+        
         x = self.conv_6(x)
+        layer_outputs.append(x)
+        layer_names.append("conv_6")
+        
         x = self.conv_7(x)
+        layer_outputs.append(x)
+        layer_names.append("conv_7")
+        
         x = self.pool_3(x)
-
+        layer_outputs.append(x)
+        layer_names.append("pool_3")
+        
         x = self.conv_8(x)
+        layer_outputs.append(x)
+        layer_names.append("conv_8")
+        
         x = self.conv_9(x)
+        layer_outputs.append(x)
+        layer_names.append("conv_9")
+        
         x = self.conv_10(x)
+        layer_outputs.append(x)
+        layer_names.append("conv_10")
+        
         x = self.pool_4(x)
-
+        layer_outputs.append(x)
+        layer_names.append("pool_4")
+        
         x = self.conv_11(x)
+        layer_outputs.append(x)
+        layer_names.append("conv_11")
+        
         x = self.conv_12(x)
+        layer_outputs.append(x)
+        layer_names.append("conv_12")
+        
         x = self.conv_13(x)
+        layer_outputs.append(x)
+        layer_names.append("conv_13")
+        
         x = self.pool_5(x)
-
+        layer_outputs.append(x)
+        layer_names.append("pool_5")
+        
         # Flatten
         x = self.flatten(x)
-
+        layer_outputs.append(x)
+        layer_names.append("flatten")
+        
         # Forward pass through dense layers
         x = self.dense_1(x)
+        layer_outputs.append(x)
+        layer_names.append("dense_1")
+        
         out = self.dense_out(x)
+        layer_outputs.append(out)
+        layer_names.append("dense_out")
+        
+        # Plot all histograms
+        plot_all_spike_histograms(layer_outputs, layer_names)
+    
+        # -----------------------------
+        # Forward pass through conv layers
+        # -----------------------------
+        # x = self.conv_1(x)
+        # plot_spike_distribution(x, "conv_1_spikes")
+        # x = self.conv_2(x)
+        # x = self.pool_1(x)
+
+        # x = self.conv_3(x)
+        # x = self.conv_4(x)
+        # x = self.pool_2(x)
+
+        # x = self.conv_5(x)
+        # x = self.conv_6(x)
+        # x = self.conv_7(x)
+        # x = self.pool_3(x)
+
+        # x = self.conv_8(x)
+        # x = self.conv_9(x)
+        # x = self.conv_10(x)
+        # x = self.pool_4(x)
+
+        # x = self.conv_11(x)
+        # x = self.conv_12(x)
+        # x = self.conv_13(x)
+        # x = self.pool_5(x)
+
+        # # Flatten
+        # x = self.flatten(x)
+
+        # # Forward pass through dense layers
+        # x = self.dense_1(x)
+        # out = self.dense_out(x)
 
         return out
 
