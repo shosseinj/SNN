@@ -1029,16 +1029,15 @@ def main():
 
         spike_monitor_cb = SpikeMonitorCallback(log_dir=os.path.join("logs", args.model_name), x_sample=x_sample)
 
-        train_subset = min(10000, len(data.x_train))
-        test_subset = min(10000, len(data.x_test))
+        # train_subset = min(10000, len(data.x_train))
+        # test_subset = min(10000, len(data.x_test))
         
 
        
         history = model.fit(
-                 data.x_train[:train_subset],
-            data.y_train[:train_subset],
-            # data.x_train,
-            # data.y_train,
+
+            data.x_train,
+            data.y_train,
             batch_size=args.batch_size,
             epochs=args.epochs,
             validation_data=(data.x_test, data.y_test),
