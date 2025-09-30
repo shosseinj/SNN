@@ -155,7 +155,7 @@ def parse_arguments():
     parser.add_argument('--testing', type=strtobool, default=False, help='Enable testing mode')
     parser.add_argument('--save', type=strtobool, default=True, help='Save model after training')
     parser.add_argument('--load', type=str, default=True, help='Load pre-trained weights')
-    parser.add_argument('--findMax', type=strtobool, default=False, help='Find maximum activations per layer')
+    parser.add_argument('--findMax', type=strtobool, default=True, help='Find maximum activations per layer')
     parser.add_argument('--plotExample', type=strtobool, default=False, help='Find maximum activations per layer')
 
     # Robustness parameters
@@ -334,7 +334,7 @@ class MaxMinPool2D(tf.keras.layers.MaxPool2D):
 #     ti = ti + tf.random.normal(tf.shape(ti), stddev=robustness_params['noise'], dtype=ti.dtype)
 #     return ti
 
-def call_spiking(tj, W, D_i, t_min_prev, t_min, t_max, robustness_params):
+def call_spiking(tj, W, D_i, t_min_prev, t_min, t_max, robustness_params, layer_index):
     """
     Calculates spiking times from which ReLU functionality can be recovered.
     FIXED: Preserves variability across layers
@@ -351,6 +351,9 @@ def call_spiking(tj, W, D_i, t_min_prev, t_min, t_max, robustness_params):
     std_input = tf.math.reduce_std(weighted_input, axis=0, keepdims=True)
     
     # Avoid division by zero
+    if (std_input.numpy() < 1e-8).any():
+        print("less", layer_index)
+
     std_input = tf.maximum(std_input, 1e-8)
     
     # FIX: Use z-score normalization with controlled scaling
@@ -402,11 +405,11 @@ class SpikingDense(tf.keras.layers.Layer):
         self.t_max=tf.Variable(tf.constant(t_min+self.B_n, dtype=tf.float32), trainable=False, name='t_max')
         return t_min, t_min+self.B_n
             
-    def call(self, tj):
+    def call(self, tj, layer_index):
         """
         Input spiking times tj, output spiking times ti or the value of membrane potential in case of output layer. 
         """
-        output = call_spiking(tj, self.kernel, self.D_i, self.t_min_prev, self.t_min, self.t_max, self.robustness_params)
+        output = call_spiking(tj, self.kernel, self.D_i, self.t_min_prev, self.t_min, self.t_max, self.robustness_params , layer_index)
         # In case of the output layer a simple integration is applied without spiking. 
         if self.outputLayer:
             # Read out the value of membrane potential at time t_min.
@@ -426,7 +429,7 @@ class SpikingConv2D(tf.keras.layers.Layer):
         self.padding=padding
         self.regularizer = kernel_regularizer
         self.initializer = kernel_initializer
-        self.B_n = (2 ) * X_n
+        self.B_n =  X_n
         self.t_min_prev, self.t_min, self.t_max=0, 0, 1
         self.robustness_params=robustness_params
         self.alpha = tf.cast(tf.fill((filters, ), 1), dtype=tf.float64)
@@ -442,24 +445,35 @@ class SpikingConv2D(tf.keras.layers.Layer):
         self.D_i = self.add_weight(shape=(9, self.filters), initializer=tf.constant_initializer(0), name='D_i')
         self.built = True
     
-    def set_params(self, t_min_prev, t_min):
+    def set_params(self, t_min_prev, t_min, t_max):
         """
         Set t_min_prev, t_min, t_max, J_ij (kernel) and vartheta_i (threshold) parameters of this layer. Alpha is fixed at 1.
         """
         self.t_min_prev=tf.Variable(tf.constant(t_min_prev, dtype=tf.float32), trainable=False, name='t_min_prev')
         self.t_min=tf.Variable(tf.constant(t_min, dtype=tf.float32), trainable=False, name='t_min')
-        self.t_max=tf.Variable(tf.constant(t_min+self.B_n, dtype=tf.float32), trainable=False, name='t_max')
+        self.t_max=tf.Variable(tf.constant(t_max, dtype=tf.float32), trainable=False, name='t_max')
         return t_min, t_min+self.B_n
 
-    def call(self, tj):
+    def call(self, tj, layer_index):
         """
         Input spiking times tj, output spiking times ti. 
         """
+        print(f"Layer {layer_index}: (tj min={tf.reduce_min(tj).numpy()}   - t_min={self.t_min.numpy()}),            (tj max={tf.reduce_max(tj).numpy()} - t_max={self.t_max.numpy()})")
+
         # Image size in case of padding='same' or padding='valid'.
         padding_size, image_same_size = int(self.padding=='same')*(self.kernel_size[0]//2), tf.shape(tj)[1] 
         image_valid_size = image_same_size - self.kernel_size[0]+1
         # Pad input with t_min value, which is equivalent with 0 in ReLU network.
-        tj=tf.pad(tj, tf.constant([[0, 0], [padding_size, padding_size,], [padding_size, padding_size], [0, 0]]), constant_values=self.t_min)
+        # tj=tf.pad(tj, tf.constant([[0, 0], [padding_size, padding_size,], [padding_size, padding_size], [0, 0]]), constant_values=self.t_min)
+        epsilon = tf.random.uniform((), minval=1e-4, maxval=5e-3, dtype=tj.dtype)
+        tj = tf.pad(
+            tj,
+            tf.constant([[0, 0], [padding_size, padding_size], [padding_size, padding_size], [0, 0]]),
+            constant_values=float(self.t_min + epsilon)
+        )
+
+            
+
         # Extract image patches of size (kernel_size, kernel_size). call_spiking function will be called for different patches in parallel.  
         tj = tf.image.extract_patches(tj, sizes=[1, self.kernel_size[0], self.kernel_size[1], 1], strides=[1, 1, 1, 1], rates=[1, 1, 1, 1], padding='VALID')
         # We reshape input and weights in order to utilize the same function as for the fully-connected layer.
@@ -467,7 +481,7 @@ class SpikingConv2D(tf.keras.layers.Layer):
         if self.padding=='valid' or self.BN!=1 or self.BN_before_ReLU==1: 
             # In this case the threshold is the same for whole input image.
             tj = tf.reshape(tj, (-1, tf.shape(W)[0]))
-            ti = call_spiking(tj, W, self.D_i[0], self.t_min_prev, self.t_min, self.t_max, self.robustness_params)
+            ti = call_spiking(tj, W, self.D_i[0], self.t_min_prev, self.t_min, self.t_max, self.robustness_params, layer_index)
             # Layer output is reshaped back.
             if self.padding=='valid':
                 ti = tf.reshape(ti, (-1, image_valid_size, image_valid_size, self.filters))
@@ -609,11 +623,11 @@ class VGG_SNN(tf.keras.Model):
         # -----------------------------
         # Forward pass through conv layers
         # -----------------------------
-        x = self.conv_1(x)
+        x = self.conv_1(x,1)
         layer_outputs.append(x)
         layer_names.append("conv_1")
         
-        x = self.conv_2(x)
+        x = self.conv_2(x,2)
         layer_outputs.append(x)
         layer_names.append("conv_2")
         
@@ -621,11 +635,11 @@ class VGG_SNN(tf.keras.Model):
         layer_outputs.append(x)
         layer_names.append("pool_1")
         
-        x = self.conv_3(x)
+        x = self.conv_3(x , 3)
         layer_outputs.append(x)
         layer_names.append("conv_3")
         
-        x = self.conv_4(x)
+        x = self.conv_4(x , 4)
         layer_outputs.append(x)
         layer_names.append("conv_4")
         
@@ -633,15 +647,15 @@ class VGG_SNN(tf.keras.Model):
         layer_outputs.append(x)
         layer_names.append("pool_2")
         
-        x = self.conv_5(x)
+        x = self.conv_5(x , 5)
         layer_outputs.append(x)
         layer_names.append("conv_5")
         
-        x = self.conv_6(x)
+        x = self.conv_6(x , 6)
         layer_outputs.append(x)
         layer_names.append("conv_6")
         
-        x = self.conv_7(x)
+        x = self.conv_7(x , 7)
         layer_outputs.append(x)
         layer_names.append("conv_7")
         
@@ -649,15 +663,15 @@ class VGG_SNN(tf.keras.Model):
         layer_outputs.append(x)
         layer_names.append("pool_3")
         
-        x = self.conv_8(x)
+        x = self.conv_8(x , 8)
         layer_outputs.append(x)
         layer_names.append("conv_8")
         
-        x = self.conv_9(x)
+        x = self.conv_9(x, 9)
         layer_outputs.append(x)
         layer_names.append("conv_9")
         
-        x = self.conv_10(x)
+        x = self.conv_10(x , 10)
         layer_outputs.append(x)
         layer_names.append("conv_10")
         
@@ -665,15 +679,15 @@ class VGG_SNN(tf.keras.Model):
         layer_outputs.append(x)
         layer_names.append("pool_4")
         
-        x = self.conv_11(x)
+        x = self.conv_11(x , 11)
         layer_outputs.append(x)
         layer_names.append("conv_11")
         
-        x = self.conv_12(x)
+        x = self.conv_12(x , 12)
         layer_outputs.append(x)
         layer_names.append("conv_12")
         
-        x = self.conv_13(x)
+        x = self.conv_13(x , 13)
         layer_outputs.append(x)
         layer_names.append("conv_13")
         
@@ -687,17 +701,17 @@ class VGG_SNN(tf.keras.Model):
         layer_names.append("flatten")
         
         # Forward pass through dense layers
-        x = self.dense_1(x)
+        x = self.dense_1(x , 14)
         layer_outputs.append(x)
         layer_names.append("dense_1")
         
-        out = self.dense_out(x)
+        out = self.dense_out(x , 15)
         layer_outputs.append(out)
         layer_names.append("dense_out")
         
         # Plot all histograms
-        # plot_all_spike_histograms(layer_outputs, layer_names)
-    
+        plot_all_spike_histograms(layer_outputs, layer_names)
+        print('df')
         # -----------------------------
         # Forward pass through conv layers
         # -----------------------------
@@ -783,11 +797,87 @@ def create_model(args, data, optimizer, robustness_params):
         model = VGG_SNN(X_n, layers2D, kernel_size, layers1D, data, optimizer, robustness_params)
         logging.info("#### Setting SNN intervals ####")
         # Set parameters of SNN network: t_min_prev, t_min, t_max.
-        t_min, t_max = 0, 1  # for the input layer
-        for layer in model.layers:
-            if 'conv' in layer.name or 'dense' in layer.name:
-                t_min, t_max = layer.set_params(t_min, t_max)
-                logging.info(f"#### Setting parms {layer.name} , t_min:{t_min}, t_max:{t_max} ####")
+        # t_min=0
+        # t_max =  0  # for the input layer
+        # for layer in model.layers:
+        #     if 'conv' in layer.name or 'dense' in layer.name:
+        #         logging.info(f"#### Setting parms {layer.name} , t_min:{t_min}, t_max:{t_max} ####")
+        #         t_min, t_max = layer.set_params(t_min, t_max)
+        # jafari
+        # Starting values
+        X_n= [1 ,1, 220.31496, 158.16324, 47.69856, 56.99223, 25.659113, 27.554497, 10.1943445, 4.2734075, 1.0084844, 0.0, 0.22237545, 0.0, 0.0, 0.1392271, 0.19542553]
+
+        t_min = 0.0
+        t_max = X_n[0]  # 1
+
+        # Layer 1
+        model.conv_1.set_params(t_min_prev=t_min, t_min=t_min , t_max=t_max)
+        t_min = 0
+        t_max = 1  # 1 + 1 = 2
+
+        # Layer 2
+        model.conv_2.set_params(t_min_prev=t_min,  t_min=t_min , t_max=t_max)
+        t_min = t_max
+        t_max = t_min + X_n[2]  # 2 + 220.31496 = 222.31496
+
+        # Layer 3
+        model.conv_3.set_params(t_min_prev=t_min,  t_min=t_min , t_max=t_max)
+        t_min = t_max
+        t_max = t_min + X_n[3]  # 222.31496 + 158.16324 = 380.4782
+
+        # Layer 4
+        model.conv_4.set_params(t_min_prev=t_min,  t_min=t_min , t_max=t_max)
+        t_min = t_max
+        t_max = t_min + X_n[4]  # 380.4782 + 47.69856 = 428.17676
+
+        # Layer 5
+        model.conv_5.set_params(t_min_prev=t_min,  t_min=t_min , t_max=t_max)
+        t_min = t_max
+        t_max = t_min + X_n[5]  # 428.17676 + 56.99223 = 485.16899
+
+        # Layer 6
+        model.conv_6.set_params(t_min_prev=t_min,  t_min=t_min , t_max=t_max)
+        t_min = t_max
+        t_max = t_min + X_n[6]  # 485.16899 + 25.659113 = 510.8281
+
+        # Layer 7
+        model.conv_7.set_params(t_min_prev=t_min,  t_min=t_min , t_max=t_max)
+        t_min = t_max
+        t_max = t_min + X_n[7]  # 510.8281 + 27.554497 = 538.3826
+
+        # Layer 8
+        model.conv_8.set_params(t_min_prev=t_min,  t_min=t_min , t_max=t_max)
+        t_min = t_max
+        t_max = t_min + X_n[8]  # 538.3826 + 10.1943445 = 548.57694
+
+        # Layer 9
+        model.conv_9.set_params(t_min_prev=t_min,  t_min=t_min , t_max=t_max)
+        t_min = t_max
+        t_max = t_min + X_n[9]  # 548.57694 + 4.2734075 = 552.85035
+
+        # Layer 10
+        model.conv_10.set_params(t_min_prev=t_min,  t_min=t_min , t_max=t_max)
+        t_min = t_max
+        t_max = t_min + X_n[10]  # 552.85035 + 1.0084844 = 553.85883
+
+        # Layer 11
+        model.conv_11.set_params(t_min_prev=t_min,  t_min=t_min , t_max=t_max)
+        t_min = t_max
+        t_max = t_min + X_n[11]  # 553.85883 + 0.0 = 553.85883
+
+        # Layer 12
+        model.conv_12.set_params(t_min_prev=t_min,  t_min=t_min , t_max=t_max)
+        t_min = t_max
+        t_max = t_min + X_n[12]  # 553.85883 + 0.22237545 = 554.08121
+
+        # Layer 13
+        model.conv_13.set_params(t_min_prev=t_min,  t_min=t_min , t_max=t_max)
+        t_min = t_max
+        t_max = t_min + X_n[13]  # 554.08121 + 0.0 = 554.08121
+
+
+
+
         dummy_input = tf.random.normal((1,) + data.input_shape)
         _ = model(dummy_input)
 
