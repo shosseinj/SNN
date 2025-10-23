@@ -166,7 +166,7 @@ def copy_model(fused_model, model, i):
         i+=1
 
 
-def fuse_bn(model, p, q, optimizer, BN = True, BN_before_ReLU = True):
+def fuse_bn(model,  optimizer, BN = True, BN_before_ReLU = True):
     """
     Creates new models which:
         Fuses all (imaginary) batch normalization layers; 

@@ -70,6 +70,8 @@ class Dataset:
         self.ttfs_convert = ttfs_convert
         self.ttfs_noise = ttfs_noise
         self.T_max = T_max 
+        self.T_start = 1 
+        self.T_end = 25 
         # Load dataset
         if data_name == 'MNIST':
             (self.x_train, self.y_train), (self.x_test, self.y_test) = tf.keras.datasets.mnist.load_data()
@@ -106,8 +108,10 @@ class Dataset:
         
         # TTFS conversion if needed
         if self.ttfs_convert:
-            self.x_train = (1.0 - self.x_train) * self.T_max  # Invert for time-to-first-spike
-            self.x_test = (1.0 - self.x_test) * self.T_max
+            # self.x_train = (1.0 - self.x_train) * self.T_max  # Invert for time-to-first-spike
+            # self.x_test = (1.0 - self.x_test) * self.T_max
+            self.x_train =   self.T_end-(self.x_train *(self.T_end- self.T_start))               
+            self.x_test =   self.T_end-(self.x_test *(self.T_end- self.T_start))
         
         # Add noise if specified
         if self.ttfs_noise > 0:
@@ -384,22 +388,22 @@ class MaxMinPool2D(tf.keras.layers.MaxPool2D):
     
 #     return ti
 
-def call_spiking(tj_flat, W, D_i_slice, t_min_prev, t_min, t_max, robustness_params=None, layer_index=None):
-    # time → strength (soft exponential)
-    beta = 3.0  # smaller = more forgiving
-    s = tf.exp(-beta * (tj_flat - t_min))
+# def call_spiking(tj_flat, W, D_i_slice, t_min_prev, t_min, t_max, robustness_params=None, layer_index=None):
+#     # time → strength (soft exponential)
+#     beta = 3.0  # smaller = more forgiving
+#     s = tf.exp(-beta * (tj_flat - t_min))
 
-    # ensure no neuron dies, normalize
-    s = s / (tf.reduce_sum(s, axis=-1, keepdims=True) + 1e-6)
+#     # ensure no neuron dies, normalize
+#     s = s / (tf.reduce_sum(s, axis=-1, keepdims=True) + 1e-6)
 
-    # membrane potential
-    v = tf.matmul(s, W)
+#     # membrane potential
+#     v = tf.matmul(s, W)
 
-    # SOFT TIME MAPPING — ALWAYS RETURNS VALID SPIKE
-    v_norm = tf.sigmoid(v)  # (0,1)
-    ti = t_min + (1 - v_norm) * (t_max - t_min)
+#     # SOFT TIME MAPPING — ALWAYS RETURNS VALID SPIKE
+#     v_norm = tf.sigmoid(v)  # (0,1)
+#     ti = t_min + (1 - v_norm) * (t_max - t_min)
 
-    return tf.clip_by_value(ti, t_min, t_max)
+#     return tf.clip_by_value(ti, t_min, t_max)
 
 
 class SpikingDense(tf.keras.layers.Layer):
@@ -448,7 +452,12 @@ class SpikingDense(tf.keras.layers.Layer):
 
            
         return output
-    
+def call_spiking(tj, W, D_i, t_min_prev, t_min, t_max, robustness_params):
+    # This is direct conversion, not temporal simulation
+    threshold = t_max - t_min - D_i
+    ti = (tf.matmul(tj-t_min, W) + threshold + t_min)  # Direct calculation
+    ti = tf.where(ti < t_max, ti, t_max)  # Clamp to max
+    return ti
     
 class SpikingConv2D(tf.keras.layers.Layer):
     def __init__(self, filters, name, padding='same', kernel_size=(3,3), robustness_params={},
@@ -545,6 +554,52 @@ class SpikingConv2D(tf.keras.layers.Layer):
                 ti = tf.concat([ti_top_row, ti_bottom_row], axis=1)   
         return ti
 
+    # def call(self, tj, layer_index):
+    #     """
+    #     Temporal simulation version
+    #     """
+    #     print(f"Layer {layer_index}: Simulating from t={self.t_min} to t={self.t_max}")
+        
+    #     # Padding with t_min (background/no activity)
+    #     padding_size = int(self.padding=='same') * (self.kernel_size[0] // 2)
+    #     epsilon = tf.random.uniform((), minval=1e-4, maxval=5e-3, dtype=tj.dtype)
+    #     tj = tf.pad(
+    #         tj,
+    #         tf.constant([[0, 0], [padding_size, padding_size], [padding_size, padding_size], [0, 0]]),
+    #         constant_values=float(self.t_min + epsilon)
+    #     )
+        
+    #     # Extract patches
+    #     tj_patches = tf.image.extract_patches(
+    #         tj, 
+    #         sizes=[1, self.kernel_size[0], self.kernel_size[1], 1], 
+    #         strides=[1, 1, 1, 1], 
+    #         rates=[1, 1, 1, 1], 
+    #         padding='VALID'
+    #     )
+        
+    #     # Reshape for processing
+    #     W = tf.reshape(self.kernel, (-1, self.filters))
+    #     batch_size = tf.shape(tj_patches)[0]
+    #     spatial_h = tf.shape(tj_patches)[1]
+    #     spatial_w = tf.shape(tj_patches)[2]
+        
+    #     # Reshape to [batch * spatial_positions, kernel_elements]
+    #     tj_flat = tf.reshape(tj_patches, [-1, tf.shape(W)[0]])
+        
+    #     # Process all spatial positions in parallel using temporal simulation
+    #     ti_flat = call_spiking_temporal(
+    #         tj_flat, W, self.D_i, 
+    #         self.t_min_prev, self.t_min, self.t_max, 
+    #         self.robustness_params, layer_index
+    #     )
+        
+    #     # Reshape back to spatial dimensions
+    #     ti = tf.reshape(ti_flat, [batch_size, spatial_h, spatial_w, self.filters])
+        
+    #     return ti
+
+
 import matplotlib.pyplot as plt
 import numpy as np
 def plot_all_spike_histograms(layers_data, layer_names):
@@ -623,6 +678,8 @@ class VGG_SNN(tf.keras.Model):
         layer_outputs = []
         layer_names = []
 
+        layer_outputs.append(x)
+        layer_names.append("input_net")
         x = self.conv_1(x,1)
         layer_outputs.append(x)
         layer_names.append("conv_1")
@@ -707,7 +764,7 @@ class VGG_SNN(tf.keras.Model):
         layer_outputs.append(out)
         layer_names.append("dense_out")
 
-        plot_all_spike_histograms(layer_outputs, layer_names)
+        plot_all_spike_histograms(layer_outputs[:4], layer_names)
 
         return out
 
@@ -747,242 +804,16 @@ def create_model(args, data, optimizer, robustness_params):
     """Create appropriate model based on arguments"""
     
     if 'VGG' in args.model_name:
-        if args.load:
-            X_n=pkl.load(open(args.weight_dir + args.data_name + '_X_n.pkl', 'rb'))
-            logging.info("#### Loading X_n ####", X_n)
-    
-        model = VGG_SNN(X_n,  optimizer, robustness_params)
-
-        x = data.x_train[0]                       # shape: (32, 32, 3)
-        dummy_input = tf.expand_dims(x, axis=0)   # (1, 32, 32, 3)
-
-        if args.plotDummy:
-            image = dummy_input[0]
-            image_np = image.numpy()
-            min_val = image_np.min()
-            max_val = image_np.max()
-
-            plt.imshow(image)
-            plt.axis('off')
-            plt.text(0, 0, f"Min: {min_val:.3f}\nMax: {max_val:.3f}", color='white', 
-                    fontsize=12, backgroundcolor='black', ha='left', va='top')
-
-            plt.show()
-
-        logging.info("#### Setting SNN intervals ####")
-        X_n= [1 ,1, 220.31496, 158.16324, 47.69856, 56.99223, 25.659113, 27.554497, 10.1943445, 4.2734075, 1.0084844, 1e-6 , 0.22237545, 1e-6 , 1e-6 , 0.1392271, 0.19542553]
-
-        X_n = numpy.array([1 ,1, 220.31496, 158.16324, 47.69856, 56.99223, 
-                25.659113, 27.554497, 10.1943445, 4.2734075, 
-                1.0084844, 1e-6 , 0.22237545, 1e-6 , 1e-6 , 
-                0.1392271, 0.19542553])
-
-        # Avoid zero and huge jumps
-        EPS = 1e-6
-        X_n = numpy.clip(X_n, EPS, numpy.percentile(X_n, 90))  # limit to 90th percentile max
-        X_n = X_n / numpy.max(X_n)  # normalize to [0,1]
-
-        t_min_prev = 0.0
-        t_min = 0.0
-        t_scale = 1.0  # total window length
-
-        import numpy as np
-
-# === raw X_n from your ANN (keep as-is) ===
-        raw_Xn = np.array([1, 1, 220.31496, 158.16324, 47.69856, 56.99223,
-                        25.659113, 27.554497, 10.1943445, 4.2734075,
-                        1.0084844, 1e-6, 0.22237545, 1e-6, 1e-6,
-                        0.1392271, 0.19542553], dtype=np.float64)
-
-        # === Hyperparameters for conversion (tweakable) ===
-        EPS = 1e-6                     # safe floor for zeros
-        clip_percentile = 90.0         # clip X_n to 90th percentile to avoid outliers
-        use_log = True                 # compress dynamic range
-        total_spike_window = 10.0      # total time budget across layers (recommended default)
-        min_frac_per_layer = 0.02      # min fraction of total window a layer receives (prevents zero-width)
-
-        # === 1) sanitize zeros / tiny values ===
-        Xn = np.maximum(raw_Xn, EPS)
-
-        # === 2) clip extreme outliers (optional but recommended) ===
-        clip_val = np.percentile(Xn, clip_percentile)
-        Xn_clipped = np.minimum(Xn, clip_val)
-
-        # === 3) optional log compression to reduce dynamic range ===
-        if use_log:
-            # log1p yields log(1 + x) - stable for small and large
-            Xc = np.log1p(Xn_clipped)
-        else:
-            Xc = Xn_clipped.astype(np.float64)
-
-        # === 4) normalize to [0, 1] ===
-        Xc_min = Xc.min()
-        Xc_max = Xc.max()
-        # prevent divide by zero
-        if Xc_max - Xc_min < 1e-8:
-            Xn_norm = np.ones_like(Xc) * 0.5
-        else:
-            Xn_norm = (Xc - Xc_min) / (Xc_max - Xc_min)
-
-        # === 5) build per-layer width fraction (ensure minimum share) ===
-        layer_fracs = Xn_norm * (1.0 - min_frac_per_layer * len(Xn_norm))  # scale
-        # It's simpler / safer to map into [min_frac, 1.0*something]
-        layer_fracs = Xn_norm * (1.0 - min_frac_per_layer) + min_frac_per_layer
-
-        # === Normalize fractions so they sum to 1 (optional) or leave proportional:
-        layer_fracs = layer_fracs / np.sum(layer_fracs)  # ensures total_spike_window is distributed exactly
-
-        # === 6) compute monotonic t_min/t_max across layers ===
-        t_min_prev = 0.0
-        t_min = 0.0
-        t_max = 0.0
-        layer_list = [
-            model.conv_1, model.conv_2, model.conv_3, model.conv_4,
-            model.conv_5, model.conv_6, model.conv_7, model.conv_8,
-            model.conv_9, model.conv_10, model.conv_11, model.conv_12,
-            model.conv_13
-        ]  # adjust if your model has more/less conv layers
-
-        for i, layer in enumerate(layer_list):
-            t_min_prev = t_min
-            t_min = t_max
-            # each layer receives a time slice proportional to layer_fracs[i]
-            delta = float(total_spike_window * layer_fracs[i])
-            # ensure a minimal positive delta
-            if delta <= 0.0:
-                delta = EPS
-            t_max = t_min + delta
-            # set params on layer (they expect floats)
-            try:
-                layer.set_params(t_min_prev=float(t_min_prev), t_min=float(t_min), t_max=float(t_max))
-            except Exception as e:
-                print(f"[WARN] could not set_params on layer {getattr(layer, 'name', i)}: {e}")
-
-        # optionally set for dense layers (flatten -> dense_1 -> dense_out)
-        t_min_prev = t_min
-        t_min = t_max
-        # give FC layers a proportion (sum of remaining fractions or small leftover)
-        fc_frac = 1.0 * np.sum(layer_fracs[len(layer_list):]) if len(layer_fracs) > len(layer_list) else 0.05
-        delta = float(total_spike_window * max(fc_frac, min_frac_per_layer))
-        t_max = t_min + delta
-        try:
-            model.dense_1.set_params(t_min_prev=float(t_min_prev), t_min=float(t_min), t_max=float(t_max))
-            # final layer
-            t_min_prev = t_min
-            t_min = t_max
-            delta = float(total_spike_window * min_frac_per_layer)
-            t_max = t_min + delta
-            model.dense_out.set_params(t_min_prev=float(t_min_prev), t_min=float(t_min), t_max=float(t_max))
-        except Exception as e:
-            print(f"[WARN] could not set_params on dense layers: {e}")
-
-        # Debug print - quick sanity check
-        print("=== Computed spike windows (t_min,t_max) per conv layer ===")
-        t_min_tmp = 0.0
-        t_max_tmp = 0.0
-        for i, frac in enumerate(layer_fracs[:len(layer_list)]):
-            old_t_min = t_min_tmp
-            t_min_tmp = t_max_tmp
-            t_max_tmp = t_min_tmp + total_spike_window * frac
-            print(f"layer {i+1:02d}: t_min={old_t_min:.6f}, t_max={t_max_tmp:.6f}, width={t_max_tmp-old_t_min:.6f}")
-
-        # t_min_prev=0.0
-        # t_min = 0.0
-        # t_max = 1 / X_n[0]  # Starting with first element, e.g., 220.31496
-
-        # # Layer 1
-        # model.conv_1.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
-        # t_min_prev = t_min
-        # t_min = t_max
-        # t_max = t_min + 1 / X_n[1]  # Next layer's max = previous max + 1 / X_n[1]
-
-        # # Layer 2
-        # model.conv_2.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
-        # t_min_prev = t_min
-        # t_min = t_max
-        # t_max = t_min + 1 / X_n[2]
-
-        # # Layer 3
-        # model.conv_3.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
-        # t_min_prev = t_min
-        # t_min = t_max
-        # t_max = t_min + 1 / X_n[3]
-
-        # # Layer 4
-        # model.conv_4.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
-        # t_min_prev = t_min
-        # t_min = t_max
-        # t_max = t_min + 1 / X_n[4]
-
-        # # Layer 5
-        # model.conv_5.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
-        # t_min_prev = t_min
-        # t_min = t_max
-        # t_max = t_min + 1 / X_n[5]
-
-        # # Layer 6
-        # model.conv_6.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
-        # t_min_prev = t_min
-        # t_min = t_max
-        # t_max = t_min + 1 / X_n[6]
-
-        # # Layer 7
-        # model.conv_7.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
-        # t_min_prev = t_min
-        # t_min = t_max
-        # t_max = t_min + 1 / X_n[7]
-
-        # # Layer 8
-        # model.conv_8.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
-        # t_min_prev = t_min
-        # t_min = t_max
-        # t_max = t_min + 1 / X_n[8]
-
-        # # Layer 9
-        # model.conv_9.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
-        # t_min_prev = t_min
-        # t_min = t_max
-        # t_max = t_min + 1 / X_n[9]
-
-        # # Layer 10
-        # model.conv_10.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
-        # t_min_prev = t_min
-        # t_min = t_max
-        # t_max = t_min + 1 / X_n[10]
-
-        # # Layer 11
-        # model.conv_11.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
-        # t_min_prev = t_min
-        # t_min = t_max
-        # t_max = t_min + 1 / X_n[11]
-
-        # # Layer 12
-        # model.conv_12.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
-        # t_min_prev = t_min
-        # t_min = t_max
-        # t_max = t_min + 1 / X_n[12]
-
-        # # Layer 13
-        # model.conv_13.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
-        # t_min_prev = t_min
-        # t_min = t_max
-        # t_max = t_min + 1 / X_n[13]  # If you want to continue for layer 14, update accordingly
-
-
-        if args.SNNSummary:
-            _ = model(dummy_input)
-            model.summary()
-
         weights_path = "cifar10vgg.h5"
         if os.path.exists(weights_path):
     
                 model_ann = VGG16(input_shape=data.input_shape, classes=10, weights_path=weights_path)
             
-                fused_model = fuse_bn(model_ann, BN='BN', p=-3.0, q=3.0, optimizer=optimizer)
+                fused_model = fuse_bn(model_ann, BN='BN',  optimizer=optimizer)
                 # logging.info(fused_model.summary())
                 if args.plotExample:
 
-
+                    import numpy as np
                     # ✅ Pick a sample from test data
                     idx = 0  # or random.randint(0, len(data.x_test)-1)
                     x_sample = data.x_test[idx]
@@ -1042,6 +873,133 @@ def create_model(args, data, optimizer, robustness_params):
                 print("[INFO] ANN weights loaded successfully")
 
 
+        if args.load:
+            X_n=pkl.load(open(args.weight_dir + args.data_name + '_X_n.pkl', 'rb'))
+            logging.info("#### Loading X_n ####", X_n)
+    
+        model = VGG_SNN(X_n,  optimizer, robustness_params)
+
+        x = data.x_train[0]                       # shape: (32, 32, 3)
+        dummy_input = tf.expand_dims(x, axis=0)   # (1, 32, 32, 3)
+
+        if args.plotDummy:
+            image = dummy_input[0]
+            image_np = image.numpy()
+            min_val = image_np.min()
+            max_val = image_np.max()
+
+            plt.imshow(image)
+            plt.axis('off')
+            plt.text(0, 0, f"Min: {min_val:.3f}\nMax: {max_val:.3f}", color='white', 
+                    fontsize=12, backgroundcolor='black', ha='left', va='top')
+
+            plt.show()
+
+        logging.info("#### Setting SNN intervals ####")
+        # X_n=[592.529, 633.0695, 179.3402, 161.51105, 77.85304, 57.72489, 41.515514, 14.545921, 10.4218855, 3.1449182, 0.97689646, 0.0, 0.0, 0.1392271, 0.19542684]
+        X_n=[592.529, 633.0695, 179.3402, 161.51105, 77.85304, 57.72489, 41.515514, 14.545921, 10.4218855, 3.1449182, 0.97689646, 0.1392271, 0.1392271, 0.1392271, 0.19542684]
+        T_total = 24     
+        t_min_prev=0.0
+        t_min = 0.0
+        t_max = T_total / X_n[0]  
+
+        # Layer 1
+        model.conv_1.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
+        t_min_prev = t_min
+        t_min = t_max
+        t_max = t_min + T_total / X_n[1]  
+
+        # Layer 2
+        model.conv_2.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
+        t_min_prev = t_min
+        t_min = t_max
+        t_max = t_min + T_total / X_n[2]
+
+        # Layer 3
+        model.conv_3.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
+        t_min_prev = t_min
+        t_min = t_max
+        t_max = t_min + T_total / X_n[3]
+
+        # Layer 4
+        model.conv_4.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
+        t_min_prev = t_min
+        t_min = t_max
+        t_max = t_min + T_total / X_n[4]
+
+        # Layer 5
+        model.conv_5.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
+        t_min_prev = t_min
+        t_min = t_max
+        t_max = t_min + T_total / X_n[5]
+
+        # Layer 6
+        model.conv_6.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
+        t_min_prev = t_min
+        t_min = t_max
+        t_max = t_min + T_total / X_n[6]
+
+        # Layer 7
+        model.conv_7.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
+        t_min_prev = t_min
+        t_min = t_max
+        t_max = t_min + T_total / X_n[7]
+
+        # Layer 8
+        model.conv_8.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
+        t_min_prev = t_min
+        t_min = t_max
+        t_max = t_min + T_total / X_n[8]
+
+        # Layer 9
+        model.conv_9.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
+        t_min_prev = t_min
+        t_min = t_max
+        t_max = t_min + T_total / X_n[9]
+
+        # Layer 10
+        model.conv_10.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
+        t_min_prev = t_min
+        t_min = t_max
+        t_max = t_min + T_total / X_n[10]
+
+        # Layer 11
+        model.conv_11.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
+        t_min_prev = t_min
+        t_min = t_max
+        t_max = t_min + T_total / X_n[11]
+
+        # Layer 12
+        model.conv_12.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
+        t_min_prev = t_min
+        t_min = t_max
+        t_max = t_min + T_total / X_n[12]
+
+        # Layer 13
+        model.conv_13.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
+        t_min_prev = t_min
+        t_min = t_max
+        t_max = t_min + T_total / X_n[13]  
+
+        model.dense_1.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
+        t_min_prev = t_min
+        t_min = t_max
+        t_max = t_min + T_total / X_n[14] 
+
+        # model.dense_out.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
+        # t_min_prev = t_min
+        # t_min = t_max
+        # t_max = t_min + T_total / X_n[15]  
+
+
+
+        if args.SNNSummary:
+            _ = model(dummy_input)
+            model.summary()
+
+    
+
+
 
 
 
@@ -1053,40 +1011,40 @@ def create_model(args, data, optimizer, robustness_params):
 
 
        
-                sample = next(iter(data.x_train))  # shape (32, 32, 3)
-                sample_batch = tf.expand_dims(sample, axis=0)  # shape (1, 32, 32, 3)
-                model(sample_batch)  # necessary to initialize weights
+        #         sample = next(iter(data.x_train))  # shape (32, 32, 3)
+        #         sample_batch = tf.expand_dims(sample, axis=0)  # shape (1, 32, 32, 3)
+        #         model(sample_batch)  # necessary to initialize weights
 
-                # Transfer Conv2D weights
-                X_n= [220.31496, 158.15593, 47.710045, 56.97334, 25.651484, 27.545849, 10.183872, 4.269333, 1.0077846, 0.0, 0.22237545, 0.0, 0.0, 0.1392271, 0.19542684]
-                ann_conv_layers = [l for l in model_ann.layers if isinstance(l, tf.keras.layers.Conv2D)]
-                snn_conv_layers = [l for l in model.conv_layers if isinstance(l, SpikingConv2D)]
-                for idx, (ann_l, snn_l) in enumerate(zip(ann_conv_layers, snn_conv_layers)):
-                    if X_n[idx] > 0:  # avoid division by zero
-                        scaled_kernel = ann_l.kernel / X_n[idx]
-                    else:
-                        scaled_kernel = ann_l.kernel 
-                    snn_l.kernel.assign(scaled_kernel)
-                    print(f"[INFO] Transferred Conv weights: {ann_l.name} → {snn_l.name}")
+        #         # Transfer Conv2D weights
+        #         X_n= [220.31496, 158.15593, 47.710045, 56.97334, 25.651484, 27.545849, 10.183872, 4.269333, 1.0077846, 0.0, 0.22237545, 0.0, 0.0, 0.1392271, 0.19542684]
+        #         ann_conv_layers = [l for l in model_ann.layers if isinstance(l, tf.keras.layers.Conv2D)]
+        #         snn_conv_layers = [l for l in model.conv_layers if isinstance(l, SpikingConv2D)]
+        #         for idx, (ann_l, snn_l) in enumerate(zip(ann_conv_layers, snn_conv_layers)):
+        #             if X_n[idx] > 0:  # avoid division by zero
+        #                 scaled_kernel = ann_l.kernel / X_n[idx]
+        #             else:
+        #                 scaled_kernel = ann_l.kernel 
+        #             snn_l.kernel.assign(scaled_kernel)
+        #             print(f"[INFO] Transferred Conv weights: {ann_l.name} → {snn_l.name}")
 
-                # Transfer Dense weights
-                offset = len(ann_conv_layers) 
-                ann_dense_layers = [l for l in model_ann.layers if isinstance(l, tf.keras.layers.Dense)]
-                snn_dense_layers = model.dense_layers + [model.output_layer]
-                for idx,(ann_l, snn_l) in enumerate(zip(ann_dense_layers, snn_dense_layers)):
-                    if X_n[offset + idx] > 0:
-                        scaled_kernel = ann_l.kernel / X_n[offset + idx]
-                    else:
-                        scaled_kernel = ann_l.kernel
-                    snn_l.kernel.assign(scaled_kernel)                   
+        #         # Transfer Dense weights
+        #         offset = len(ann_conv_layers) 
+        #         ann_dense_layers = [l for l in model_ann.layers if isinstance(l, tf.keras.layers.Dense)]
+        #         snn_dense_layers = model.dense_layers + [model.output_layer]
+        #         for idx,(ann_l, snn_l) in enumerate(zip(ann_dense_layers, snn_dense_layers)):
+        #             if X_n[offset + idx] > 0:
+        #                 scaled_kernel = ann_l.kernel / X_n[offset + idx]
+        #             else:
+        #                 scaled_kernel = ann_l.kernel
+        #             snn_l.kernel.assign(scaled_kernel)                   
 
-                    print("[INFO] ANN → SNN weight transfer complete")
+        #             print("[INFO] ANN → SNN weight transfer complete")
 
         
-        else:
-            print("[INFO] No pretrained ANN weights found, training from scratch")
+        # else:
+        #     print("[INFO] No pretrained ANN weights found, training from scratch")
                     
-        return model
+        # return model
 
     
 
