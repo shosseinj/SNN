@@ -17,8 +17,8 @@ from tensorflow.keras.models import Model, Sequential
 from tensorflow.keras.layers import Lambda, Input, Conv2D, BatchNormalization, Activation, Dropout, MaxPooling2D, Flatten, Dense
 from tensorflow.keras import regularizers
 import numpy as np
-
-
+import numpy as np
+import matplotlib.pyplot as plt
 import logging
 import tensorflow as tf
 from tensorflow.keras.layers import Conv2D, Input, Dense, MaxPool2D, Flatten, Dropout, BatchNormalization
@@ -148,11 +148,16 @@ def parse_arguments():
     parser.add_argument('--weight_dir', type=str, default='./weights/', help='Directory for logging')
     parser.add_argument('--model_type', type=str, default='SNN', help='Model type: SNN | ReLU')
     parser.add_argument('--model_name', type=str, default='BN', help='Model name (contains FC2 or VGG)')
-    parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate')
+    parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate')
     parser.add_argument('--batch_size', type=int, default=20, help='Batch size')
     parser.add_argument('--epochs', type=int, default=1, help='Number of training epochs')
     parser.add_argument('--training', type=strtobool, default=True, help='Enable training mode')
+    parser.add_argument('--SNNSummary', type=strtobool, default=True, help='Enable training mode')
+    parser.add_argument('--testBeforeTraining', type=strtobool, default=False, help='Enable training mode')
+    parser.add_argument('--eagerExcecution', type=strtobool, default=False, help='Enable training mode')
     parser.add_argument('--testing', type=strtobool, default=False, help='Enable testing mode')
+    parser.add_argument('--flatten', type=strtobool, default=False, help='Enable testing mode')
+    parser.add_argument('--ttfsConvertDataset', type=strtobool, default=False, help='Enable testing mode')
     parser.add_argument('--save', type=strtobool, default=True, help='Save model after training')
     parser.add_argument('--load', type=str, default=True, help='Load pre-trained weights')
     parser.add_argument('--findMax', type=strtobool, default=True, help='Find maximum activations per layer')
@@ -422,14 +427,14 @@ class SpikingDense(tf.keras.layers.Layer):
     
     
 class SpikingConv2D(tf.keras.layers.Layer):
-    def __init__(self, filters, name, X_n=1, padding='same', kernel_size=(3,3), robustness_params={},
+    def __init__(self, filters, name, padding='same', kernel_size=(3,3), robustness_params={},
                  kernel_regularizer=None, kernel_initializer=None):
         self.filters=filters
         self.kernel_size=kernel_size
         self.padding=padding
         self.regularizer = kernel_regularizer
         self.initializer = kernel_initializer
-        self.B_n =  X_n
+ 
         self.t_min_prev, self.t_min, self.t_max=0, 0, 1
         self.robustness_params=robustness_params
         self.alpha = tf.cast(tf.fill((filters, ), 1), dtype=tf.float64)
@@ -452,7 +457,7 @@ class SpikingConv2D(tf.keras.layers.Layer):
         self.t_min_prev=tf.Variable(tf.constant(t_min_prev, dtype=tf.float32), trainable=False, name='t_min_prev')
         self.t_min=tf.Variable(tf.constant(t_min, dtype=tf.float32), trainable=False, name='t_min')
         self.t_max=tf.Variable(tf.constant(t_max, dtype=tf.float32), trainable=False, name='t_max')
-        return t_min, t_min+self.B_n
+     
 
     def call(self, tj, layer_index):
         """
@@ -544,58 +549,35 @@ def plot_all_spike_histograms(layers_data, layer_names):
 
 
 class VGG_SNN(tf.keras.Model):
-    def __init__(self,X_n, layers2D, kernel_size, layers1D, data, optimizer, robustness_params):
+    def __init__(self,X_n,  optimizer, robustness_params):
         super().__init__()
 
-        # Convolutional layers
-        self.conv_1 = SpikingConv2D(64, kernel_size=(3,3), X_n=X_n[0],
-                                    robustness_params=robustness_params, name='conv_1')
-        self.conv_2 = SpikingConv2D(64, kernel_size=(3,3), X_n=X_n[1],
-                                    robustness_params=robustness_params, name='conv_2')
+        self.conv_1 = SpikingConv2D(64, kernel_size=(3,3),  robustness_params=robustness_params, name='conv_1')
+        self.conv_2 = SpikingConv2D(64, kernel_size=(3,3),  robustness_params=robustness_params, name='conv_2')
         self.pool_1 = MaxMinPool2D(pool_size=2)
 
-        self.conv_3 = SpikingConv2D(128, kernel_size=(3,3), X_n=X_n[2],
-                                    robustness_params=robustness_params, name='conv_3')
-        self.conv_4 = SpikingConv2D(128, kernel_size=(3,3), X_n=X_n[3],
-                                    robustness_params=robustness_params, name='conv_4')
+        self.conv_3 = SpikingConv2D(128, kernel_size=(3,3), robustness_params=robustness_params, name='conv_3')
+        self.conv_4 = SpikingConv2D(128, kernel_size=(3,3), robustness_params=robustness_params, name='conv_4')
         self.pool_2 = MaxMinPool2D(pool_size=2)
 
-        self.conv_5 = SpikingConv2D(256, kernel_size=(3,3), X_n=X_n[4],
-                                    robustness_params=robustness_params, name='conv_5')
-        self.conv_6 = SpikingConv2D(256, kernel_size=(3,3), X_n=X_n[5],
-                                    robustness_params=robustness_params, name='conv_6')
-        self.conv_7 = SpikingConv2D(256, kernel_size=(3,3), X_n=X_n[6],
-                                    robustness_params=robustness_params, name='conv_7')
+        self.conv_5 = SpikingConv2D(256, kernel_size=(3,3), robustness_params=robustness_params, name='conv_5')
+        self.conv_6 = SpikingConv2D(256, kernel_size=(3,3), robustness_params=robustness_params, name='conv_6')
+        self.conv_7 = SpikingConv2D(256, kernel_size=(3,3), robustness_params=robustness_params, name='conv_7')
         self.pool_3 = MaxMinPool2D(pool_size=2)
 
-        self.conv_8 = SpikingConv2D(512, kernel_size=(3,3), X_n=X_n[7],
-                                    robustness_params=robustness_params, name='conv_8')
-        self.conv_9 = SpikingConv2D(512, kernel_size=(3,3), X_n=X_n[8],
-                                    robustness_params=robustness_params, name='conv_9')
-        self.conv_10 = SpikingConv2D(512, kernel_size=(3,3), X_n=X_n[9],
-                                     robustness_params=robustness_params, name='conv_10')
+        self.conv_8 = SpikingConv2D(512, kernel_size=(3,3), robustness_params=robustness_params, name='conv_8')
+        self.conv_9 = SpikingConv2D(512, kernel_size=(3,3), robustness_params=robustness_params, name='conv_9')
+        self.conv_10 = SpikingConv2D(512, kernel_size=(3,3),robustness_params=robustness_params, name='conv_10')
         self.pool_4 = MaxMinPool2D(pool_size=2)
 
-        self.conv_11 = SpikingConv2D(512, kernel_size=(3,3), X_n=X_n[10],
-                                     robustness_params=robustness_params, name='conv_11')
-        self.conv_12 = SpikingConv2D(512, kernel_size=(3,3), X_n=X_n[11],
-                                     robustness_params=robustness_params, name='conv_12')
-        self.conv_13 = SpikingConv2D(512, kernel_size=(3,3), X_n=X_n[12],
-                                     robustness_params=robustness_params, name='conv_13')
+        self.conv_11 = SpikingConv2D(512, kernel_size=(3,3),robustness_params=robustness_params, name='conv_11')
+        self.conv_12 = SpikingConv2D(512, kernel_size=(3,3),robustness_params=robustness_params, name='conv_12')
+        self.conv_13 = SpikingConv2D(512, kernel_size=(3,3),robustness_params=robustness_params, name='conv_13')
         self.pool_5 = MaxMinPool2D(pool_size=2)
-
-        # Flatten layer
         self.flatten = tf.keras.layers.Flatten()
 
-        # Dense layers
-        self.dense_1 = SpikingDense(512, X_n=X_n[13], robustness_params=robustness_params, name='dense_1')
-        self.dense_out = SpikingDense(
-            10,
-            X_n=X_n[14],
-            outputLayer=True,
-            robustness_params=robustness_params,
-            name='dense_out'
-        )
+        self.dense_1 = SpikingDense(512,  robustness_params=robustness_params, name='dense_1')
+        self.dense_out = SpikingDense(10, outputLayer=True, robustness_params=robustness_params,name='dense_out')
 
         self.optimizer = optimizer
         self.conv_layers = [
@@ -609,20 +591,11 @@ class VGG_SNN(tf.keras.Model):
         self.dense_layers = [self.dense_1]
         self.output_layer = self.dense_out
 
-    def call(self, x, training=False):
-        # Forward pass through conv layers
-        # Inside VGG_SNN.call()
-        t_min, t_max = 0.0, 1.0
-        x = tf.clip_by_value(x, 0.0, 1.0)
-        x = t_min + (1.0 - x) * (t_max - t_min)
-    # ensure valid spike times
+    def call(self, x):
 
         layer_outputs = []
         layer_names = []
-        
-        # -----------------------------
-        # Forward pass through conv layers
-        # -----------------------------
+
         x = self.conv_1(x,1)
         layer_outputs.append(x)
         layer_names.append("conv_1")
@@ -695,12 +668,10 @@ class VGG_SNN(tf.keras.Model):
         layer_outputs.append(x)
         layer_names.append("pool_5")
         
-        # Flatten
         x = self.flatten(x)
         layer_outputs.append(x)
         layer_names.append("flatten")
         
-        # Forward pass through dense layers
         x = self.dense_1(x , 14)
         layer_outputs.append(x)
         layer_names.append("dense_1")
@@ -708,43 +679,8 @@ class VGG_SNN(tf.keras.Model):
         out = self.dense_out(x , 15)
         layer_outputs.append(out)
         layer_names.append("dense_out")
-        
-        # Plot all histograms
+
         plot_all_spike_histograms(layer_outputs, layer_names)
-        print('df')
-        # -----------------------------
-        # Forward pass through conv layers
-        # -----------------------------
-        # x = self.conv_1(x)
-        # plot_spike_distribution(x, "conv_1_spikes")
-        # x = self.conv_2(x)
-        # x = self.pool_1(x)
-
-        # x = self.conv_3(x)
-        # x = self.conv_4(x)
-        # x = self.pool_2(x)
-
-        # x = self.conv_5(x)
-        # x = self.conv_6(x)
-        # x = self.conv_7(x)
-        # x = self.pool_3(x)
-
-        # x = self.conv_8(x)
-        # x = self.conv_9(x)
-        # x = self.conv_10(x)
-        # x = self.pool_4(x)
-
-        # x = self.conv_11(x)
-        # x = self.conv_12(x)
-        # x = self.conv_13(x)
-        # x = self.pool_5(x)
-
-        # # Flatten
-        # x = self.flatten(x)
-
-        # # Forward pass through dense layers
-        # x = self.dense_1(x)
-        # out = self.dense_out(x)
 
         return out
 
@@ -754,11 +690,10 @@ class SpikeMonitorCallback(tf.keras.callbacks.Callback):
         super().__init__()
         self.log_dir = log_dir
         self.file_writer = tf.summary.create_file_writer(log_dir)
-        self.x_sample = x_sample  # a small batch to monitor
+        self.x_sample = x_sample  
 
     def on_epoch_end(self, epoch, logs=None):
         ti = self.x_sample
-        # Go through layers
         for layer in self.model.conv_layers:
             ti = layer(ti)
             if isinstance(layer, SpikingConv2D):
@@ -785,26 +720,15 @@ def create_model(args, data, optimizer, robustness_params):
     """Create appropriate model based on arguments"""
     
     if 'VGG' in args.model_name:
-        layers2D = [64, 64, 'pool', 128, 128, 'pool',
-                    256, 256, 256, 'pool', 512, 512, 512, 'pool',
-                    512, 512, 512, 'pool']
-        layers1D = [512]
-        kernel_size = (3, 3)
-
         if args.load:
             X_n=pkl.load(open(args.weight_dir + args.data_name + '_X_n.pkl', 'rb'))
             logging.info("#### Loading X_n ####", X_n)
-        model = VGG_SNN(X_n, layers2D, kernel_size, layers1D, data, optimizer, robustness_params)
+    
+        model = VGG_SNN(X_n,  optimizer, robustness_params)
+
+        if args.SNNSummary:
+            model.summary()
         logging.info("#### Setting SNN intervals ####")
-        # Set parameters of SNN network: t_min_prev, t_min, t_max.
-        # t_min=0
-        # t_max =  0  # for the input layer
-        # for layer in model.layers:
-        #     if 'conv' in layer.name or 'dense' in layer.name:
-        #         logging.info(f"#### Setting parms {layer.name} , t_min:{t_min}, t_max:{t_max} ####")
-        #         t_min, t_max = layer.set_params(t_min, t_max)
-        # jafari
-        # Starting values
         X_n= [1 ,1, 220.31496, 158.16324, 47.69856, 56.99223, 25.659113, 27.554497, 10.1943445, 4.2734075, 1.0084844, 0.0, 0.22237545, 0.0, 0.0, 0.1392271, 0.19542553]
 
         t_min = 0.0
@@ -891,8 +815,7 @@ def create_model(args, data, optimizer, robustness_params):
                 fused_model = fuse_bn(model_ann, BN='BN', p=-3.0, q=3.0, optimizer=optimizer)
                 # logging.info(fused_model.summary())
                 if args.plotExample:
-                    import numpy as np
-                    import matplotlib.pyplot as plt
+
 
                     # ✅ Pick a sample from test data
                     idx = 0  # or random.randint(0, len(data.x_test)-1)
@@ -990,18 +913,9 @@ def create_model(args, data, optimizer, robustness_params):
             print("[INFO] No pretrained ANN weights found, training from scratch")
                     
         return model
+
     
-    elif args.model_type == 'ReLU':
-        # Create ANN model
-        if 'VGG' in args.model_name:
-            model = VGG16(input_shape=data.input_shape, classes=data.num_of_classes)
-        else:
-            model = create_simple_relu_model(data.input_shape, data.num_of_classes)
-        return model
-    
-    else:  # SNN but not VGG
-        model = SimpleSNN(data.input_shape, data.num_of_classes, robustness_params)
-        return model
+
 
 # ==============================
 # MAIN TRAINING FUNCTION
@@ -1023,12 +937,11 @@ def main():
         'latency_quantiles': args.latency_quantiles
     }
 
-    # Dataset
     data = Dataset(
         args.data_name,
         args.logging_dir,
-        flatten='FC' in args.model_name,
-        ttfs_convert=args.model_type == 'SNN',  # Convert for SNN models
+        flatten= args.flatten,
+        ttfs_convert= args.ttfsConvertDataset,
         ttfs_noise=args.noise,
     )
 
@@ -1041,36 +954,25 @@ def main():
     )
     optimizer = Adam(learning_rate=lr_schedule, clipnorm=1.0)
 
-    # Model creation
     logging.info("#### Creating the model ####")
     model = create_model(args, data, optimizer, robustness_params)
     
-    # # Build model
     # if hasattr(data, 'input_shape'):
-    #     model.build(input_shape=(None,) + data.input_shape)
+    #     dummy_input = tf.zeros((1,) + data.input_shape, dtype=tf.float32)
     # else:
-    #     # For flattened data
-    #     model.build(input_shape=(None, data.x_train.shape[1]))
-    
+    #     dummy_input = tf.zeros((1, data.x_train.shape[1]), dtype=tf.float32)
 
-    if hasattr(data, 'input_shape'):
-        dummy_input = tf.zeros((1,) + data.input_shape, dtype=tf.float32)
-    else:
-        dummy_input = tf.zeros((1, data.x_train.shape[1]), dtype=tf.float32)
-
-    _ = model(dummy_input)
+    # _ = model(dummy_input)
 
     # model.summary()
 
     # Enable eager execution for debugging if needed
-    if args.training and ('SNN' in args.model_type):
+    if args.eagerExcecution:
         tf.config.run_functions_eagerly(True)
 
     # Training
     if args.training:
         logging.info("#### Training ####")
-
-        # Compile model
         model.compile(
             optimizer=optimizer,
             loss=CategoricalCrossentropy(from_logits=False),
@@ -1090,49 +992,41 @@ def main():
         log_dir = os.path.join("logs", args.model_name, datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
         tensorboard_cb = TensorBoard(log_dir=log_dir, histogram_freq=1)
 
-        # Test with small dataset first
-        logging.info("Testing with small batch...")
-        try:
-            # Use smaller subset for initial test
-            train_subset = min(1000, len(data.x_train))
-            test_subset = min(500, len(data.x_test))
-            
-            history = model.fit(
-                data.x_train[:train_subset],
-                data.y_train[:train_subset],
-                batch_size=min(32, args.batch_size),
-                epochs=1,
-                validation_data=(data.x_test[:test_subset], data.y_test[:test_subset]),
-                verbose=1
-            )
-            logging.info("Small batch training successful!")
-        except Exception as e:
-            logging.error(f"Training failed: {e}")
-            import traceback
-            logging.error(traceback.format_exc())
-            return
+        if args.testBeforeTraining:
+            logging.info("Testing with small batch...")
+            try:
+                # Use smaller subset for initial test
+                train_subset = min(1000, len(data.x_train))
+                test_subset = min(500, len(data.x_test))
+                
+                history = model.fit(
+                    data.x_train[:train_subset],
+                    data.y_train[:train_subset],
+                    batch_size=min(32, args.batch_size),
+                    epochs=1,
+                    validation_data=(data.x_test[:test_subset], data.y_test[:test_subset]),
+                    verbose=1
+                )
+                logging.info("Small batch training successful!")
+            except Exception as e:
+                logging.error(f"Training failed: {e}")
+                import traceback
+                logging.error(traceback.format_exc())
+                return
 
-        # Full training
+
         logging.info("Starting full training...")
-        # Pick a small batch of inputs for monitoring
-        x_sample = data.x_train[:32]
 
+        x_sample = data.x_train[:32]
         spike_monitor_cb = SpikeMonitorCallback(log_dir=os.path.join("logs", args.model_name), x_sample=x_sample)
 
-        # train_subset = min(10000, len(data.x_train))
-        # test_subset = min(10000, len(data.x_test))
-        
-
-       
         history = model.fit(
-
             data.x_train,
             data.y_train,
             batch_size=args.batch_size,
             epochs=args.epochs,
             validation_data=(data.x_test, data.y_test),
             callbacks=[tensorboard_cb, save_cb, checkpoint_cb, spike_monitor_cb],
-            # callbacks=[tensorboard_cb, save_cb, checkpoint_cb, spike_monitor_cb],
             verbose=1
         )
 
@@ -1144,7 +1038,6 @@ def main():
             model.save_weights("weights/final_model.h5")
             logging.info("Model saved → weights/final_model.h5")
 
-    # Testing only mode
     elif args.testing:
         logging.info("#### Testing ####")
         if args.load and args.load != 'False':
