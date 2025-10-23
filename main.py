@@ -786,16 +786,106 @@ def create_model(args, data, optimizer, robustness_params):
         t_min = 0.0
         t_scale = 1.0  # total window length
 
-        for i, layer in enumerate(model.conv_layers):
-            if isinstance(layer, SpikingConv2D):
-                t_min_prev = t_min
-                t_min = t_max if i > 0 else 0.0
-                t_max = t_min + t_scale * (1 - X_n[i]) + EPS
-                layer.set_params(t_min_prev, t_min, t_max)
-            else:
-                # Pooling layer or other: assign default or no timing param if applicable
-                # For example: pass or set trivial thresholds
-                pass
+        import numpy as np
+
+# === raw X_n from your ANN (keep as-is) ===
+        raw_Xn = np.array([1, 1, 220.31496, 158.16324, 47.69856, 56.99223,
+                        25.659113, 27.554497, 10.1943445, 4.2734075,
+                        1.0084844, 1e-6, 0.22237545, 1e-6, 1e-6,
+                        0.1392271, 0.19542553], dtype=np.float64)
+
+        # === Hyperparameters for conversion (tweakable) ===
+        EPS = 1e-6                     # safe floor for zeros
+        clip_percentile = 90.0         # clip X_n to 90th percentile to avoid outliers
+        use_log = True                 # compress dynamic range
+        total_spike_window = 10.0      # total time budget across layers (recommended default)
+        min_frac_per_layer = 0.02      # min fraction of total window a layer receives (prevents zero-width)
+
+        # === 1) sanitize zeros / tiny values ===
+        Xn = np.maximum(raw_Xn, EPS)
+
+        # === 2) clip extreme outliers (optional but recommended) ===
+        clip_val = np.percentile(Xn, clip_percentile)
+        Xn_clipped = np.minimum(Xn, clip_val)
+
+        # === 3) optional log compression to reduce dynamic range ===
+        if use_log:
+            # log1p yields log(1 + x) - stable for small and large
+            Xc = np.log1p(Xn_clipped)
+        else:
+            Xc = Xn_clipped.astype(np.float64)
+
+        # === 4) normalize to [0, 1] ===
+        Xc_min = Xc.min()
+        Xc_max = Xc.max()
+        # prevent divide by zero
+        if Xc_max - Xc_min < 1e-8:
+            Xn_norm = np.ones_like(Xc) * 0.5
+        else:
+            Xn_norm = (Xc - Xc_min) / (Xc_max - Xc_min)
+
+        # === 5) build per-layer width fraction (ensure minimum share) ===
+        layer_fracs = Xn_norm * (1.0 - min_frac_per_layer * len(Xn_norm))  # scale
+        # It's simpler / safer to map into [min_frac, 1.0*something]
+        layer_fracs = Xn_norm * (1.0 - min_frac_per_layer) + min_frac_per_layer
+
+        # === Normalize fractions so they sum to 1 (optional) or leave proportional:
+        layer_fracs = layer_fracs / np.sum(layer_fracs)  # ensures total_spike_window is distributed exactly
+
+        # === 6) compute monotonic t_min/t_max across layers ===
+        t_min_prev = 0.0
+        t_min = 0.0
+        t_max = 0.0
+        layer_list = [
+            model.conv_1, model.conv_2, model.conv_3, model.conv_4,
+            model.conv_5, model.conv_6, model.conv_7, model.conv_8,
+            model.conv_9, model.conv_10, model.conv_11, model.conv_12,
+            model.conv_13
+        ]  # adjust if your model has more/less conv layers
+
+        for i, layer in enumerate(layer_list):
+            t_min_prev = t_min
+            t_min = t_max
+            # each layer receives a time slice proportional to layer_fracs[i]
+            delta = float(total_spike_window * layer_fracs[i])
+            # ensure a minimal positive delta
+            if delta <= 0.0:
+                delta = EPS
+            t_max = t_min + delta
+            # set params on layer (they expect floats)
+            try:
+                layer.set_params(t_min_prev=float(t_min_prev), t_min=float(t_min), t_max=float(t_max))
+            except Exception as e:
+                print(f"[WARN] could not set_params on layer {getattr(layer, 'name', i)}: {e}")
+
+        # optionally set for dense layers (flatten -> dense_1 -> dense_out)
+        t_min_prev = t_min
+        t_min = t_max
+        # give FC layers a proportion (sum of remaining fractions or small leftover)
+        fc_frac = 1.0 * np.sum(layer_fracs[len(layer_list):]) if len(layer_fracs) > len(layer_list) else 0.05
+        delta = float(total_spike_window * max(fc_frac, min_frac_per_layer))
+        t_max = t_min + delta
+        try:
+            model.dense_1.set_params(t_min_prev=float(t_min_prev), t_min=float(t_min), t_max=float(t_max))
+            # final layer
+            t_min_prev = t_min
+            t_min = t_max
+            delta = float(total_spike_window * min_frac_per_layer)
+            t_max = t_min + delta
+            model.dense_out.set_params(t_min_prev=float(t_min_prev), t_min=float(t_min), t_max=float(t_max))
+        except Exception as e:
+            print(f"[WARN] could not set_params on dense layers: {e}")
+
+        # Debug print - quick sanity check
+        print("=== Computed spike windows (t_min,t_max) per conv layer ===")
+        t_min_tmp = 0.0
+        t_max_tmp = 0.0
+        for i, frac in enumerate(layer_fracs[:len(layer_list)]):
+            old_t_min = t_min_tmp
+            t_min_tmp = t_max_tmp
+            t_max_tmp = t_min_tmp + total_spike_window * frac
+            print(f"layer {i+1:02d}: t_min={old_t_min:.6f}, t_max={t_max_tmp:.6f}, width={t_max_tmp-old_t_min:.6f}")
+
         # t_min_prev=0.0
         # t_min = 0.0
         # t_max = 1 / X_n[0]  # Starting with first element, e.g., 220.31496
