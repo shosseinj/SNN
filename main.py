@@ -20,6 +20,8 @@ import numpy as np
 import numpy as np
 import matplotlib.pyplot as plt
 import logging
+import numpy as np 
+import numpy  
 import tensorflow as tf
 from tensorflow.keras.layers import Conv2D, Input, Dense, MaxPool2D, Flatten, Dropout, BatchNormalization
 from tensorflow.keras.models import Model
@@ -152,7 +154,7 @@ def parse_arguments():
     parser.add_argument('--batch_size', type=int, default=20, help='Batch size')
     parser.add_argument('--epochs', type=int, default=1, help='Number of training epochs')
     parser.add_argument('--training', type=strtobool, default=True, help='Enable training mode')
-    parser.add_argument('--plotDummy', type=strtobool, default=True, help='Enable training mode')
+    parser.add_argument('--plotDummy', type=strtobool, default=False, help='Enable training mode')
     parser.add_argument('--SNNSummary', type=strtobool, default=True, help='Enable training mode')
     parser.add_argument('--testBeforeTraining', type=strtobool, default=False, help='Enable training mode')
     parser.add_argument('--eagerExcecution', type=strtobool, default=False, help='Enable training mode')
@@ -340,56 +342,77 @@ class MaxMinPool2D(tf.keras.layers.MaxPool2D):
 #     ti = ti + tf.random.normal(tf.shape(ti), stddev=robustness_params['noise'], dtype=ti.dtype)
 #     return ti
 
-def call_spiking(tj, W, D_i, t_min_prev, t_min, t_max, robustness_params, layer_index):
-    """
-    Calculates spiking times from which ReLU functionality can be recovered.
-    FIXED: Preserves variability across layers
-    """
-    # Calculate the weighted input sum
-    weighted_input = tf.matmul(tj - t_min, W)
+# def call_spiking(tj, W, D_i, t_min_prev, t_min, t_max, robustness_params, layer_index):
+#     """
+#     Calculates spiking times from which ReLU functionality can be recovered.
+#     FIXED: Preserves variability across layers
+#     """
+#     # Calculate the weighted input sum
+#     weighted_input = tf.matmul(tj - t_min, W)
     
-    # Calculate the range of possible spike times
-    time_range = t_max - t_min
+#     # Calculate the range of possible spike times
+#     time_range = t_max - t_min
     
-    # FIX: Use gentle normalization instead of aggressive max normalization
-    # Calculate robust statistics across the entire weighted input
-    mean_input = tf.reduce_mean(weighted_input, axis=0, keepdims=True)
-    std_input = tf.math.reduce_std(weighted_input, axis=0, keepdims=True)
+#     # FIX: Use gentle normalization instead of aggressive max normalization
+#     # Calculate robust statistics across the entire weighted input
+#     mean_input = tf.reduce_mean(weighted_input, axis=0, keepdims=True)
+#     std_input = tf.math.reduce_std(weighted_input, axis=0, keepdims=True)
     
-    # Avoid division by zero
-    if (std_input.numpy() < 1e-8).any():
-        print("less", layer_index)
+#     # Avoid division by zero
+#     if (std_input.numpy() < 1e-8).any():
+#         print("less", layer_index)
 
-    std_input = tf.maximum(std_input, 1e-8)
+#     std_input = tf.maximum(std_input, 1e-8)
     
-    # FIX: Use z-score normalization with controlled scaling
-    # This preserves relative differences while preventing explosion
-    normalized_input = (weighted_input - mean_input) / std_input
+#     # FIX: Use z-score normalization with controlled scaling
+#     # This preserves relative differences while preventing explosion
+#     normalized_input = (weighted_input - mean_input) / std_input
     
-    # FIX: Scale to use only a portion of the time range to prevent saturation
-    # Use hyperbolic tangent to smoothly map to the time range
-    scaled_input = tf.tanh(normalized_input / 3.0)  # Division by 3 keeps most values in reasonable range
+#     # FIX: Scale to use only a portion of the time range to prevent saturation
+#     # Use hyperbolic tangent to smoothly map to the time range
+#     scaled_input = tf.tanh(normalized_input / 3.0)  # Division by 3 keeps most values in reasonable range
     
-    # FIX: Map to spike times with better distribution
-    # Center in the time range and subtract thresholds
-    ti = t_min + (time_range / 2.0) * (1.0 - scaled_input) - D_i
+#     # FIX: Map to spike times with better distribution
+#     # Center in the time range and subtract thresholds
+#     ti = t_min + (time_range / 2.0) * (1.0 - scaled_input) - D_i
     
-    # Alternative simpler approach if above is too complex:
-    # ti = t_max - tf.nn.softplus(weighted_input / std_input) * (time_range / 4.0) - D_i
+#     # Alternative simpler approach if above is too complex:
+#     # ti = t_max - tf.nn.softplus(weighted_input / std_input) * (time_range / 4.0) - D_i
     
-    # Ensure valid spiking time in [t_min, t_max]
-    ti = tf.clip_by_value(ti, t_min, t_max)
+#     # Ensure valid spiking time in [t_min, t_max]
+#     ti = tf.clip_by_value(ti, t_min, t_max)
     
-    return ti
+#     return ti
+
+def call_spiking(tj_flat, W, D_i_slice, t_min_prev, t_min, t_max, robustness_params=None, layer_index=None):
+    # time → strength (soft exponential)
+    beta = 3.0  # smaller = more forgiving
+    s = tf.exp(-beta * (tj_flat - t_min))
+
+    # ensure no neuron dies, normalize
+    s = s / (tf.reduce_sum(s, axis=-1, keepdims=True) + 1e-6)
+
+    # membrane potential
+    v = tf.matmul(s, W)
+
+    # SOFT TIME MAPPING — ALWAYS RETURNS VALID SPIKE
+    v_norm = tf.sigmoid(v)  # (0,1)
+    ti = t_min + (1 - v_norm) * (t_max - t_min)
+
+    return tf.clip_by_value(ti, t_min, t_max)
+
+
 class SpikingDense(tf.keras.layers.Layer):
-    def __init__(self, units, name, X_n=1, outputLayer=False, robustness_params={}, input_dim=None,
+    def __init__(self, units, name, outputLayer=False, robustness_params={}, input_dim=None,
                  kernel_regularizer=None, kernel_initializer=None):
         self.units = units
-        self.B_n = (2 ) * X_n
+
         self.outputLayer=outputLayer
         self.t_min_prev, self.t_min, self.t_max=0, 0, 1
         self.robustness_params=robustness_params
-        self.alpha = tf.cast(tf.fill((units, ), 1), dtype=tf.float32) 
+        # self.alpha = tf.cast(tf.fill((units, ), 1), dtype=tf.float32) 
+        self.alpha = tf.cast(tf.ones((self.units,), dtype=tf.float32), tf.float32)
+
         self.input_dim=input_dim
         self.regularizer = kernel_regularizer
         self.initializer = kernel_initializer
@@ -409,7 +432,7 @@ class SpikingDense(tf.keras.layers.Layer):
         self.t_min_prev=tf.Variable(tf.constant(t_min_prev, dtype=tf.float32), trainable=False, name='t_min_prev')
         self.t_min=tf.Variable(tf.constant(t_min, dtype=tf.float32), trainable=False, name='t_min')
         self.t_max=tf.Variable(tf.constant(t_max, dtype=tf.float32), trainable=False, name='t_max')
-        return t_min, t_min+self.B_n
+       
             
     def call(self, tj, layer_index):
         """
@@ -438,7 +461,9 @@ class SpikingConv2D(tf.keras.layers.Layer):
  
         self.t_min_prev, self.t_min, self.t_max=0, 0, 1
         self.robustness_params=robustness_params
-        self.alpha = tf.cast(tf.fill((filters, ), 1), dtype=tf.float64)
+        # self.alpha = tf.cast(tf.fill((filters, ), 1), dtype=tf.float32)
+        self.alpha = tf.cast(tf.ones((filters,), dtype=tf.float32), tf.float32)
+
         super(SpikingConv2D, self).__init__(name=name)
     
     def build(self, input_shape):
@@ -579,7 +604,7 @@ class VGG_SNN(tf.keras.Model):
         self.flatten = tf.keras.layers.Flatten()
 
         self.dense_1 = SpikingDense(512,  robustness_params=robustness_params, name='dense_1')
-        self.dense_out = SpikingDense(10, outputLayer=True, robustness_params=robustness_params,name='dense_out')
+        self.dense_out = SpikingDense(10, outputLayer=False, robustness_params=robustness_params,name='dense_out')
 
         self.optimizer = optimizer
         self.conv_layers = [
@@ -743,97 +768,121 @@ def create_model(args, data, optimizer, robustness_params):
                     fontsize=12, backgroundcolor='black', ha='left', va='top')
 
             plt.show()
+
+        logging.info("#### Setting SNN intervals ####")
+        X_n= [1 ,1, 220.31496, 158.16324, 47.69856, 56.99223, 25.659113, 27.554497, 10.1943445, 4.2734075, 1.0084844, 1e-6 , 0.22237545, 1e-6 , 1e-6 , 0.1392271, 0.19542553]
+
+        X_n = numpy.array([1 ,1, 220.31496, 158.16324, 47.69856, 56.99223, 
+                25.659113, 27.554497, 10.1943445, 4.2734075, 
+                1.0084844, 1e-6 , 0.22237545, 1e-6 , 1e-6 , 
+                0.1392271, 0.19542553])
+
+        # Avoid zero and huge jumps
+        EPS = 1e-6
+        X_n = numpy.clip(X_n, EPS, numpy.percentile(X_n, 90))  # limit to 90th percentile max
+        X_n = X_n / numpy.max(X_n)  # normalize to [0,1]
+
+        t_min_prev = 0.0
+        t_min = 0.0
+        t_scale = 1.0  # total window length
+
+        for i, layer in enumerate(model.conv_layers):
+            if isinstance(layer, SpikingConv2D):
+                t_min_prev = t_min
+                t_min = t_max if i > 0 else 0.0
+                t_max = t_min + t_scale * (1 - X_n[i]) + EPS
+                layer.set_params(t_min_prev, t_min, t_max)
+            else:
+                # Pooling layer or other: assign default or no timing param if applicable
+                # For example: pass or set trivial thresholds
+                pass
+        # t_min_prev=0.0
+        # t_min = 0.0
+        # t_max = 1 / X_n[0]  # Starting with first element, e.g., 220.31496
+
+        # # Layer 1
+        # model.conv_1.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
+        # t_min_prev = t_min
+        # t_min = t_max
+        # t_max = t_min + 1 / X_n[1]  # Next layer's max = previous max + 1 / X_n[1]
+
+        # # Layer 2
+        # model.conv_2.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
+        # t_min_prev = t_min
+        # t_min = t_max
+        # t_max = t_min + 1 / X_n[2]
+
+        # # Layer 3
+        # model.conv_3.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
+        # t_min_prev = t_min
+        # t_min = t_max
+        # t_max = t_min + 1 / X_n[3]
+
+        # # Layer 4
+        # model.conv_4.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
+        # t_min_prev = t_min
+        # t_min = t_max
+        # t_max = t_min + 1 / X_n[4]
+
+        # # Layer 5
+        # model.conv_5.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
+        # t_min_prev = t_min
+        # t_min = t_max
+        # t_max = t_min + 1 / X_n[5]
+
+        # # Layer 6
+        # model.conv_6.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
+        # t_min_prev = t_min
+        # t_min = t_max
+        # t_max = t_min + 1 / X_n[6]
+
+        # # Layer 7
+        # model.conv_7.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
+        # t_min_prev = t_min
+        # t_min = t_max
+        # t_max = t_min + 1 / X_n[7]
+
+        # # Layer 8
+        # model.conv_8.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
+        # t_min_prev = t_min
+        # t_min = t_max
+        # t_max = t_min + 1 / X_n[8]
+
+        # # Layer 9
+        # model.conv_9.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
+        # t_min_prev = t_min
+        # t_min = t_max
+        # t_max = t_min + 1 / X_n[9]
+
+        # # Layer 10
+        # model.conv_10.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
+        # t_min_prev = t_min
+        # t_min = t_max
+        # t_max = t_min + 1 / X_n[10]
+
+        # # Layer 11
+        # model.conv_11.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
+        # t_min_prev = t_min
+        # t_min = t_max
+        # t_max = t_min + 1 / X_n[11]
+
+        # # Layer 12
+        # model.conv_12.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
+        # t_min_prev = t_min
+        # t_min = t_max
+        # t_max = t_min + 1 / X_n[12]
+
+        # # Layer 13
+        # model.conv_13.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
+        # t_min_prev = t_min
+        # t_min = t_max
+        # t_max = t_min + 1 / X_n[13]  # If you want to continue for layer 14, update accordingly
+
+
         if args.SNNSummary:
             _ = model(dummy_input)
             model.summary()
 
-        logging.info("#### Setting SNN intervals ####")
-        X_n= [1 ,1, 220.31496, 158.16324, 47.69856, 56.99223, 25.659113, 27.554497, 10.1943445, 4.2734075, 1.0084844, 0.0, 0.22237545, 0.0, 0.0, 0.1392271, 0.19542553]
-
-        t_min_prev=0.0
-        t_min = 0.0
-        t_max = X_n[0]  # Starting with first element, e.g., 220.31496
-
-        # Layer 1
-        model.conv_1.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
-        t_min_prev = t_min
-        t_min = t_max
-        t_max = t_min + X_n[1]  # Next layer's max = previous max + X_n[1]
-
-        # Layer 2
-        model.conv_2.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
-        t_min_prev = t_min
-        t_min = t_max
-        t_max = t_min + X_n[2]
-
-        # Layer 3
-        model.conv_3.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
-        t_min_prev = t_min
-        t_min = t_max
-        t_max = t_min + X_n[3]
-
-        # Layer 4
-        model.conv_4.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
-        t_min_prev = t_min
-        t_min = t_max
-        t_max = t_min + X_n[4]
-
-        # Layer 5
-        model.conv_5.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
-        t_min_prev = t_min
-        t_min = t_max
-        t_max = t_min + X_n[5]
-
-        # Layer 6
-        model.conv_6.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
-        t_min_prev = t_min
-        t_min = t_max
-        t_max = t_min + X_n[6]
-
-        # Layer 7
-        model.conv_7.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
-        t_min_prev = t_min
-        t_min = t_max
-        t_max = t_min + X_n[7]
-
-        # Layer 8
-        model.conv_8.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
-        t_min_prev = t_min
-        t_min = t_max
-        t_max = t_min + X_n[8]
-
-        # Layer 9
-        model.conv_9.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
-        t_min_prev = t_min
-        t_min = t_max
-        t_max = t_min + X_n[9]
-
-        # Layer 10
-        model.conv_10.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
-        t_min_prev = t_min
-        t_min = t_max
-        t_max = t_min + X_n[10]
-
-        # Layer 11
-        model.conv_11.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
-        t_min_prev = t_min
-        t_min = t_max
-        t_max = t_min + X_n[11]
-
-        # Layer 12
-        model.conv_12.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
-        t_min_prev = t_min
-        t_min = t_max
-        t_max = t_min + X_n[12]
-
-        # Layer 13
-        model.conv_13.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
-        t_min_prev = t_min
-        t_min = t_max
-        t_max = t_min + X_n[13]  # If you want to continue for layer 14, update accordingly
-
-
-    
         weights_path = "cifar10vgg.h5"
         if os.path.exists(weights_path):
     
