@@ -157,7 +157,7 @@ def parse_arguments():
     parser.add_argument('--eagerExcecution', type=strtobool, default=False, help='Enable training mode')
     parser.add_argument('--testing', type=strtobool, default=False, help='Enable testing mode')
     parser.add_argument('--flatten', type=strtobool, default=False, help='Enable testing mode')
-    parser.add_argument('--ttfsConvertDataset', type=strtobool, default=False, help='Enable testing mode')
+    parser.add_argument('--ttfsConvertDataset', type=strtobool, default=True, help='Enable testing mode')
     parser.add_argument('--save', type=strtobool, default=True, help='Save model after training')
     parser.add_argument('--load', type=str, default=True, help='Load pre-trained weights')
     parser.add_argument('--findMax', type=strtobool, default=False, help='Find maximum activations per layer')
@@ -978,16 +978,7 @@ def main():
     logging.info("#### Creating the model ####")
     model = create_model(args, data, optimizer, robustness_params)
     
-    # if hasattr(data, 'input_shape'):
-    #     dummy_input = tf.zeros((1,) + data.input_shape, dtype=tf.float32)
-    # else:
-    #     dummy_input = tf.zeros((1, data.x_train.shape[1]), dtype=tf.float32)
 
-    # _ = model(dummy_input)
-
-    # model.summary()
-
-    # Enable eager execution for debugging if needed
     if args.eagerExcecution:
         tf.config.run_functions_eagerly(True)
 
