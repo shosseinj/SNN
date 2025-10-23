@@ -152,6 +152,7 @@ def parse_arguments():
     parser.add_argument('--batch_size', type=int, default=20, help='Batch size')
     parser.add_argument('--epochs', type=int, default=1, help='Number of training epochs')
     parser.add_argument('--training', type=strtobool, default=True, help='Enable training mode')
+    parser.add_argument('--plotDummy', type=strtobool, default=True, help='Enable training mode')
     parser.add_argument('--SNNSummary', type=strtobool, default=True, help='Enable training mode')
     parser.add_argument('--testBeforeTraining', type=strtobool, default=False, help='Enable training mode')
     parser.add_argument('--eagerExcecution', type=strtobool, default=False, help='Enable training mode')
@@ -440,15 +441,16 @@ class SpikingConv2D(tf.keras.layers.Layer):
         self.alpha = tf.cast(tf.fill((filters, ), 1), dtype=tf.float64)
         super(SpikingConv2D, self).__init__(name=name)
     
-    def build(self, input_dim):
-        self.kernel = self.add_weight(shape=(self.kernel_size[0], self.kernel_size[1], input_dim[-1], self.filters),
+    def build(self, input_shape):
+        self.kernel = self.add_weight(shape=(self.kernel_size[0], self.kernel_size[1], input_shape[-1], self.filters),
                       name='kernel', regularizer=self.regularizer, initializer=self.initializer)
+
         # Depending on whether there is fusion with batch normalization layer and its position with respect to ReLU activation function the processing in spiking convolutional layer can be different.
         self.BN=tf.Variable(tf.constant([0]), name='BN', trainable=False)
         self.BN_before_ReLU=tf.Variable(tf.constant([0]), name='BN_before_ReLU', trainable=False)
         # When fusing a batch normalization layer with the next convolutional layer where padding=='same', some of the biases in scaled ReLU network are changed, leading to 9 different values.
         self.D_i = self.add_weight(shape=(9, self.filters), initializer=tf.constant_initializer(0), name='D_i')
-        self.built = True
+        # self.built = True
     
     def set_params(self, t_min_prev, t_min, t_max):
         """
@@ -463,7 +465,7 @@ class SpikingConv2D(tf.keras.layers.Layer):
         """
         Input spiking times tj, output spiking times ti. 
         """
-        print(f"Layer {layer_index}: (tj min={tf.reduce_min(tj).numpy()}   - t_min={self.t_min.numpy()}),            (tj max={tf.reduce_max(tj).numpy()} - t_max={self.t_max.numpy()})")
+        # print(f"Layer {layer_index}: (tj min={tf.reduce_min(tj).numpy()}   - t_min={self.t_min.numpy()}),            (tj max={tf.reduce_max(tj).numpy()} - t_max={self.t_max.numpy()})")
 
         # Image size in case of padding='same' or padding='valid'.
         padding_size, image_same_size = int(self.padding=='same')*(self.kernel_size[0]//2), tf.shape(tj)[1] 
@@ -726,8 +728,25 @@ def create_model(args, data, optimizer, robustness_params):
     
         model = VGG_SNN(X_n,  optimizer, robustness_params)
 
+        x = data.x_train[0]                       # shape: (32, 32, 3)
+        dummy_input = tf.expand_dims(x, axis=0)   # (1, 32, 32, 3)
+
+        if args.plotDummy:
+            image = dummy_input[0]
+            image_np = image.numpy()
+            min_val = image_np.min()
+            max_val = image_np.max()
+
+            plt.imshow(image)
+            plt.axis('off')
+            plt.text(0, 0, f"Min: {min_val:.3f}\nMax: {max_val:.3f}", color='white', 
+                    fontsize=12, backgroundcolor='black', ha='left', va='top')
+
+            plt.show()
         if args.SNNSummary:
+            _ = model(dummy_input)
             model.summary()
+
         logging.info("#### Setting SNN intervals ####")
         X_n= [1 ,1, 220.31496, 158.16324, 47.69856, 56.99223, 25.659113, 27.554497, 10.1943445, 4.2734075, 1.0084844, 0.0, 0.22237545, 0.0, 0.0, 0.1392271, 0.19542553]
 
@@ -812,11 +831,6 @@ def create_model(args, data, optimizer, robustness_params):
         t_min_prev = t_min
         t_min = t_max
         t_max = t_min + X_n[13]  # If you want to continue for layer 14, update accordingly
-
-
-
-        # dummy_input = tf.random.normal((1,) + data.input_shape)
-        # _ = model(dummy_input)
 
 
     

@@ -6,7 +6,7 @@
       "type": "python",
       "request": "launch",
       "program": "${workspaceFolder}/main.py",
-      // "python": "I:/SNN/newvenv/Scripts/python.exe",
+      "python": "I:/SNN/newvenv/Scripts/python.exe",
       "args": [
         "--model_type=SNN",
         // "--model_type=ReLU",
