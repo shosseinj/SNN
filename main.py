@@ -168,6 +168,7 @@ def parse_arguments():
     parser.add_argument('--save', type=strtobool, default=True, help='Save model after training')
     parser.add_argument('--load', type=str, default=True, help='Load pre-trained weights')
     parser.add_argument('--findMax', type=strtobool, default=False, help='Find maximum activations per layer')
+    parser.add_argument('--loadWeightANNtoSNN', type=strtobool, default=True, help='Find maximum activations per layer')
     parser.add_argument('--plotExample', type=strtobool, default=False, help='Find maximum activations per layer')
 
     # Robustness parameters
@@ -498,7 +499,7 @@ def call_spiking_temporal(tj, W, D_i, t_min_prev, t_min, t_max, robustness_param
             # Check for firing
             min_threshold = current_time_float + 0.000001  # Can't fire before next step
             safe_threshold = tf.maximum(D_i, min_threshold)
-            fires_now = (membrane_potential >= safe_threshold) & ~has_fired
+            fires_now = (membrane_potential >= D_i) & ~has_fired
             
             if tf.reduce_any(fires_now):
                 output_spike_times = tf.where(
@@ -565,8 +566,12 @@ class SpikingConv2D(tf.keras.layers.Layer):
         self.BN=tf.Variable(tf.constant([0]), name='BN', trainable=False)
         self.BN_before_ReLU=tf.Variable(tf.constant([0]), name='BN_before_ReLU', trainable=False)
         # When fusing a batch normalization layer with the next convolutional layer where padding=='same', some of the biases in scaled ReLU network are changed, leading to 9 different values.
-        self.D_i = self.add_weight(shape=(9, self.filters), initializer=tf.constant_initializer(0), name='D_i')
-        # self.built = True
+        self.D_i = self.add_weight(
+            shape=(9, self.filters),
+            initializer=tf.keras.initializers.RandomUniform(0.1, 1.0),  # Range that matches membrane potentials
+            trainable=True,
+            name='D_i'
+        )        # self.built = True
     
     def set_params(self, t_min_prev, t_min, t_max):
         """
@@ -988,7 +993,7 @@ def create_model(args, data, optimizer, robustness_params):
                 model_ann = VGG16(input_shape=data.input_shape, classes=10, weights_path=weights_path)
             
                 fused_model = fuse_bn(model_ann, BN='BN',  optimizer=optimizer)
-                # logging.info(fused_model.summary())
+
                 if args.plotExample:
 
                     import numpy as np
@@ -1059,6 +1064,10 @@ def create_model(args, data, optimizer, robustness_params):
 
         x = data.x_train[0]                       # shape: (32, 32, 3)
         dummy_input = tf.expand_dims(x, axis=0)   # (1, 32, 32, 3)
+        _ = model(dummy_input)
+
+        # X_n= [220.31496, 158.15593, 47.710045, 56.97334, 25.651484, 27.545849, 10.183872, 4.269333, 1.0077846, 0.0, 0.22237545, 0.0, 0.0, 0.1392271, 0.19542684]
+        # jafari
 
         if args.plotDummy:
             image = dummy_input[0]
@@ -1090,6 +1099,32 @@ def create_model(args, data, optimizer, robustness_params):
         for i, layer in enumerate(layers):
             layer.set_params(t_min_prev=0.0, t_min=0.0, t_max=total_time)
             print(f"Layer {i+1:2d}: Full window 0.0 to {total_time:.1f}")
+        
+        
+        if args.loadWeightANNtoSNN:
+          
+            ann_conv_layers = [l for l in model_ann.layers if isinstance(l, tf.keras.layers.Conv2D)]
+            snn_conv_layers = [l for l in model.conv_layers if isinstance(l, SpikingConv2D)]
+            for idx, (ann_l, snn_l) in enumerate(zip(ann_conv_layers, snn_conv_layers)):
+                # if X_n[idx] > 0:  # avoid division by zero
+                #     scaled_kernel = ann_l.kernel / X_n[idx]
+                # else:
+                scaled_kernel = ann_l.kernel 
+                snn_l.kernel.assign(scaled_kernel)
+                print(f"[INFO] Transferred Conv weights: {ann_l.name} → {snn_l.name}")
+
+            # Transfer Dense weights
+            offset = len(ann_conv_layers) 
+            ann_dense_layers = [l for l in model_ann.layers if isinstance(l, tf.keras.layers.Dense)]
+            snn_dense_layers = model.dense_layers + [model.output_layer]
+            for idx,(ann_l, snn_l) in enumerate(zip(ann_dense_layers, snn_dense_layers)):
+                # if X_n[offset + idx] > 0:
+                #     scaled_kernel = ann_l.kernel / X_n[offset + idx]
+                # else:
+                scaled_kernel = ann_l.kernel
+                snn_l.kernel.assign(scaled_kernel)                   
+
+                print("[INFO] ANN → SNN weight transfer complete")
 
         # for i, layer in enumerate(layers):
         #     t_min_prev = current_time
@@ -1200,7 +1235,6 @@ def create_model(args, data, optimizer, robustness_params):
 
 
         if args.SNNSummary:
-            _ = model(dummy_input)
             model.summary()
 
     
@@ -1222,29 +1256,7 @@ def create_model(args, data, optimizer, robustness_params):
         #         model(sample_batch)  # necessary to initialize weights
 
         #         # Transfer Conv2D weights
-        #         X_n= [220.31496, 158.15593, 47.710045, 56.97334, 25.651484, 27.545849, 10.183872, 4.269333, 1.0077846, 0.0, 0.22237545, 0.0, 0.0, 0.1392271, 0.19542684]
-        #         ann_conv_layers = [l for l in model_ann.layers if isinstance(l, tf.keras.layers.Conv2D)]
-        #         snn_conv_layers = [l for l in model.conv_layers if isinstance(l, SpikingConv2D)]
-        #         for idx, (ann_l, snn_l) in enumerate(zip(ann_conv_layers, snn_conv_layers)):
-        #             if X_n[idx] > 0:  # avoid division by zero
-        #                 scaled_kernel = ann_l.kernel / X_n[idx]
-        #             else:
-        #                 scaled_kernel = ann_l.kernel 
-        #             snn_l.kernel.assign(scaled_kernel)
-        #             print(f"[INFO] Transferred Conv weights: {ann_l.name} → {snn_l.name}")
-
-        #         # Transfer Dense weights
-        #         offset = len(ann_conv_layers) 
-        #         ann_dense_layers = [l for l in model_ann.layers if isinstance(l, tf.keras.layers.Dense)]
-        #         snn_dense_layers = model.dense_layers + [model.output_layer]
-        #         for idx,(ann_l, snn_l) in enumerate(zip(ann_dense_layers, snn_dense_layers)):
-        #             if X_n[offset + idx] > 0:
-        #                 scaled_kernel = ann_l.kernel / X_n[offset + idx]
-        #             else:
-        #                 scaled_kernel = ann_l.kernel
-        #             snn_l.kernel.assign(scaled_kernel)                   
-
-        #             print("[INFO] ANN → SNN weight transfer complete")
+        #       
 
         
         # else:
