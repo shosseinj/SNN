@@ -70,8 +70,8 @@ class Dataset:
         self.ttfs_convert = ttfs_convert
         self.ttfs_noise = ttfs_noise
         self.T_max = T_max 
-        self.T_start = 1 
-        self.T_end = 25 
+        self.T_start = 0
+        self.T_end = 24 
         # Load dataset
         if data_name == 'MNIST':
             (self.x_train, self.y_train), (self.x_test, self.y_test) = tf.keras.datasets.mnist.load_data()
@@ -466,17 +466,18 @@ def call_spiking_temporal(tj, W, D_i, t_min_prev, t_min, t_max, robustness_param
     input_size = tf.shape(tj)[1]
     output_size = tf.shape(W)[1]
     
-    # Initialize outputs (t_max means never fires)
-    output_spike_times = tf.ones((batch_size, output_size), dtype=tf.float32) * t_max
+# Initialize outputs - use a value LARGER than t_max to indicate "never fired"
+    NEVER_FIRED_SENTINEL = t_max + 1000.0  # Any value larger than max possible time
+    output_spike_times = tf.ones((batch_size, output_size), dtype=tf.float32) * NEVER_FIRED_SENTINEL
     membrane_potential = tf.zeros((batch_size, output_size), dtype=tf.float32)
     has_fired = tf.zeros((batch_size, output_size), dtype=tf.bool)
-    
+
     # Use fine-grained simulation within the time window
-    simulation_steps = 100  # Adjust based on your time window size
+    simulation_steps = 100
     dt = (t_max - t_min) / simulation_steps
-    
+
     print(f"  Temporal {layer_index}: {simulation_steps} steps, dt={dt:.4f}")
-    
+
     for step in range(simulation_steps):
         current_time = t_min + step * dt
         next_time = t_min + (step + 1) * dt
@@ -495,32 +496,40 @@ def call_spiking_temporal(tj, W, D_i, t_min_prev, t_min, t_max, robustness_param
             membrane_potential += current_input * not_fired_mask
             
             # Check for firing
-            fires_now = (membrane_potential >= D_i[0]) & ~has_fired
+            min_threshold = current_time_float + 0.000001  # Can't fire before next step
+            safe_threshold = tf.maximum(D_i, min_threshold)
+            fires_now = (membrane_potential >= safe_threshold) & ~has_fired
             
             if tf.reduce_any(fires_now):
                 output_spike_times = tf.where(
                     fires_now,
-                    current_time_float,
-                    output_spike_times
+                    current_time_float,  # Set actual spike time
+                    output_spike_times   # Keep existing value
                 )
                 has_fired = tf.logical_or(has_fired, fires_now)
-    
+
+    # After simulation, clamp any remaining sentinel values to t_max
+    output_spike_times = tf.where(
+        output_spike_times > t_max,  # If sentinel value (never fired)
+        t_max,                       # Set to t_max
+        output_spike_times           # Otherwise keep actual spike time
+    )
     # Apply robustness features (keep your existing quantization and noise)
-    if robustness_params.get('time_bits', 0) != 0:
-        output_spike_times = tf.quantization.fake_quant_with_min_max_args(
-            output_spike_times,
-            min=float(t_min),
-            max=float(t_max),
-            num_bits=robustness_params['time_bits']
-        )
+    # if robustness_params.get('time_bits', 0) != 0:
+    #     output_spike_times = tf.quantization.fake_quant_with_min_max_args(
+    #         output_spike_times,
+    #         min=float(t_min),
+    #         max=float(t_max),
+    #         num_bits=robustness_params['time_bits']
+    #     )
     
-    if robustness_params.get('noise', 0) > 0:
-        output_spike_times += tf.random.normal(
-            tf.shape(output_spike_times), 
-            stddev=robustness_params['noise'], 
-            dtype=output_spike_times.dtype
-        )
-        output_spike_times = tf.clip_by_value(output_spike_times, float(t_min), float(t_max))
+    # if robustness_params.get('noise', 0) > 0:
+    #     output_spike_times += tf.random.normal(
+    #         tf.shape(output_spike_times), 
+    #         stddev=robustness_params['noise'], 
+    #         dtype=output_spike_times.dtype
+    #     )
+    #     output_spike_times = tf.clip_by_value(output_spike_times, float(t_min), float(t_max))
     
     # Statistics
     fired_count = tf.reduce_sum(tf.cast(output_spike_times < t_max, tf.float32))
@@ -1078,24 +1087,27 @@ def create_model(args, data, optimizer, robustness_params):
         window_size=2.0
         total_time=24
 
-        
         for i, layer in enumerate(layers):
-            t_min_prev = current_time
-            t_min = current_time
+            layer.set_params(t_min_prev=0.0, t_min=0.0, t_max=total_time)
+            print(f"Layer {i+1:2d}: Full window 0.0 to {total_time:.1f}")
+
+        # for i, layer in enumerate(layers):
+        #     t_min_prev = current_time
+        #     t_min = current_time
             
-            # Calculate t_max, but don't exceed total_time
-            proposed_t_max = current_time + window_size
-            t_max = min(proposed_t_max, total_time)
+        #     # Calculate t_max, but don't exceed total_time
+        #     proposed_t_max = current_time + window_size
+        #     t_max = min(proposed_t_max, total_time)
             
-            layer.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
+        #     layer.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
             
-            actual_window = t_max - t_min
-            print(f"Layer {i+1:2d}: Time {t_min:5.1f} to {t_max:5.1f} (window: {actual_window:.1f})")
+        #     actual_window = t_max - t_min
+        #     print(f"Layer {i+1:2d}: Time {t_min:5.1f} to {t_max:5.1f} (window: {actual_window:.1f})")
             
-            current_time = t_max
-            if current_time >= total_time:
-                print(f"Stopping at layer {i+1} - reached total time limit")
-                break
+        #     current_time = t_max
+        #     if current_time >= total_time:
+        #         print(f"Stopping at layer {i+1} - reached total time limit")
+        #         break
 
 
         
