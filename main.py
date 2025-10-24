@@ -457,17 +457,46 @@ class SpikingDense(tf.keras.layers.Layer):
         self.t_max=tf.Variable(tf.constant(t_max, dtype=tf.float32), trainable=False, name='t_max')
        
             
+    # def call(self, tj, layer_index):
+    #     """
+    #     Input spiking times tj, output spiking times ti or the value of membrane potential in case of output layer. 
+    #     """
+    #     output = call_spiking(tj, self.kernel, self.D_i, self.t_min_prev, self.t_min, self.t_max)
+    #     # In case of the output layer a simple integration is applied without spiking. 
+    #     if self.outputLayer:
+    #         # Read out the value of membrane potential at time t_min.
+    #         W_mult_x = tf.matmul(self.t_min-tj, self.kernel)
+    #         self.alpha = self.D_i/(self.t_min-self.t_min_prev)
+    #         output = self.alpha * (self.t_min - self.t_min_prev) + W_mult_x
+    #     return output
     def call(self, tj, layer_index):
         """
-        Input spiking times tj, output spiking times ti or the value of membrane potential in case of output layer. 
+        Input spiking times tj, output spiking times ti or membrane potential for output layer.
         """
-        output = call_spiking(tj, self.kernel, self.D_i, self.t_min_prev, self.t_min, self.t_max)
-        # In case of the output layer a simple integration is applied without spiking. 
         if self.outputLayer:
-            # Read out the value of membrane potential at time t_min.
-            W_mult_x = tf.matmul(self.t_min-tj, self.kernel)
-            self.alpha = self.D_i/(self.t_min-self.t_min_prev)
-            output = self.alpha * (self.t_min - self.t_min_prev) + W_mult_x
+            # OUTPUT LAYER - non-spiking integration (from paper's Methods)
+            # Integrate inputs during [t_min_prev, t_min] window
+            valid_spikes_mask = (tj >= self.t_min_prev) & (tj < self.t_min)
+            
+            # Calculate contribution from each input spike
+            # Each spike contributes: W_ij * (t_min - t_j) for t_min_prev <= t_j < t_min
+            time_contributions = self.t_min - tj
+            time_contributions = tf.where(valid_spikes_mask, time_contributions, 0.0)
+            
+            # Membrane potential at readout time (paper's Methods)
+            # V_i = A_i^(N+1) * (t_min - t_min_prev) + sum_j W_ij^(N+1) * (t_min - t_j)
+            A_i = 0.0  # Typically 0 for output layer, but could be trainable
+            W_mult_x = tf.matmul(time_contributions, self.kernel)
+            output = A_i * (self.t_min - self.t_min_prev) + W_mult_x
+            
+        else:
+            # HIDDEN LAYER - spiking behavior
+            output = call_spiking(
+                tj, self.kernel, self.D_i, 
+                self.t_min_prev, self.t_min, self.t_max,
+          
+            )
+        
         return output
 
 
@@ -1116,21 +1145,15 @@ def create_model(args, data, optimizer, robustness_params):
         num_layers = 15
         time_per_layer = total_time / num_layers  # = 1.6
 
-        t_min, t_max = 0, 1  # for the input layer
-        for layer in model.layers:
-            if 'conv' in layer.name or 'dense' in layer.name:
-                t_min, t_max = layer.set_params(t_min, t_max)
-
-                
-        # for i, layer in enumerate(layers):
-        #     t_min_prev = current_time
-        #     t_min = current_time
-        #     t_max = current_time + time_per_layer
+        for i, layer in enumerate(layers):
+            t_min_prev = current_time
+            t_min = current_time
+            t_max = current_time + time_per_layer
             
-        #     layer.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
-        #     print(f"Layer {i+1:2d}: Window [{t_min:.1f}, {t_max:.1f}]")
+            layer.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
+            print(f"Layer {i+1:2d}: Window [{t_min:.1f}, {t_max:.1f}]")
     
-        #     current_time = t_max  # Next layer starts where this one ends
+            current_time = t_max  # Next layer starts where this one ends
         
         if args.loadWeightANNtoSNN:
           
