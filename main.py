@@ -322,89 +322,6 @@ class MaxMinPool2D(tf.keras.layers.MaxPool2D):
 
 
 
-# def call_spiking(tj, W, D_i, t_min_prev, t_min, t_max, robustness_params):
-#     """
-#     Calculates spiking times from which ReLU functionality can be recovered.
-#     Assumes tau_c=1 and B_i^(n)=1
-#     """
-#     if robustness_params['time_bits'] != 0:
-#         tj = t_min_prev+tf.quantization.fake_quant_with_min_max_args(tf.cast(tj-t_min_prev, dtype=tf.float32),
-#             min=t_min_prev, max=t_min, num_bits=robustness_params['time_bits'])
-#         tj = tf.cast(tj, tf.float64)
-#     if robustness_params['weight_bits'] != 0:
-#         W = tf.quantization.fake_quant_with_min_max_args(tf.cast(W, dtype=tf.float32),
-#             min=robustness_params['w_min'], max=robustness_params['w_max'], num_bits=robustness_params['weight_bits'])
-#         W = tf.cast(W, tf.float64)
-
-#     # Calculate the spiking threshold (Eq. 18)
-#     threshold = t_max - t_min - D_i
-#     # Calculate output spiking time ti (Eq. 7)
-#     ti = (tf.matmul(tj-t_min, W) + threshold + t_min)
-#     # Ensure valid spiking time. Do not spike for ti >= t_max.
-#     # No spike is modelled as t_max that cancels out in the next layer (tj-t_min) as t_min there is t_max
-#     ti = tf.where(ti < t_max, ti, t_max)
-#     # Add noise to the spiking time for noise simulations
-#     ti = ti + tf.random.normal(tf.shape(ti), stddev=robustness_params['noise'], dtype=ti.dtype)
-#     return ti
-
-# def call_spiking(tj, W, D_i, t_min_prev, t_min, t_max, robustness_params, layer_index):
-#     """
-#     Calculates spiking times from which ReLU functionality can be recovered.
-#     FIXED: Preserves variability across layers
-#     """
-#     # Calculate the weighted input sum
-#     weighted_input = tf.matmul(tj - t_min, W)
-    
-#     # Calculate the range of possible spike times
-#     time_range = t_max - t_min
-    
-#     # FIX: Use gentle normalization instead of aggressive max normalization
-#     # Calculate robust statistics across the entire weighted input
-#     mean_input = tf.reduce_mean(weighted_input, axis=0, keepdims=True)
-#     std_input = tf.math.reduce_std(weighted_input, axis=0, keepdims=True)
-    
-#     # Avoid division by zero
-#     if (std_input.numpy() < 1e-8).any():
-#         print("less", layer_index)
-
-#     std_input = tf.maximum(std_input, 1e-8)
-    
-#     # FIX: Use z-score normalization with controlled scaling
-#     # This preserves relative differences while preventing explosion
-#     normalized_input = (weighted_input - mean_input) / std_input
-    
-#     # FIX: Scale to use only a portion of the time range to prevent saturation
-#     # Use hyperbolic tangent to smoothly map to the time range
-#     scaled_input = tf.tanh(normalized_input / 3.0)  # Division by 3 keeps most values in reasonable range
-    
-#     # FIX: Map to spike times with better distribution
-#     # Center in the time range and subtract thresholds
-#     ti = t_min + (time_range / 2.0) * (1.0 - scaled_input) - D_i
-    
-#     # Alternative simpler approach if above is too complex:
-#     # ti = t_max - tf.nn.softplus(weighted_input / std_input) * (time_range / 4.0) - D_i
-    
-#     # Ensure valid spiking time in [t_min, t_max]
-#     ti = tf.clip_by_value(ti, t_min, t_max)
-    
-#     return ti
-
-# def call_spiking(tj_flat, W, D_i_slice, t_min_prev, t_min, t_max, robustness_params=None, layer_index=None):
-#     # time → strength (soft exponential)
-#     beta = 3.0  # smaller = more forgiving
-#     s = tf.exp(-beta * (tj_flat - t_min))
-
-#     # ensure no neuron dies, normalize
-#     s = s / (tf.reduce_sum(s, axis=-1, keepdims=True) + 1e-6)
-
-#     # membrane potential
-#     v = tf.matmul(s, W)
-
-#     # SOFT TIME MAPPING — ALWAYS RETURNS VALID SPIKE
-#     v_norm = tf.sigmoid(v)  # (0,1)
-#     ti = t_min + (1 - v_norm) * (t_max - t_min)
-
-#     return tf.clip_by_value(ti, t_min, t_max)
 
 def call_spiking(tj, W, D_i, t_min_prev, t_min, t_max):
     """
@@ -469,7 +386,7 @@ class SpikingDense(tf.keras.layers.Layer):
     #         self.alpha = self.D_i/(self.t_min-self.t_min_prev)
     #         output = self.alpha * (self.t_min - self.t_min_prev) + W_mult_x
     #     return output
-    def call(self, tj, layer_index):
+    def call(self, tj):
         """
         Input spiking times tj, output spiking times ti or membrane potential for output layer.
         """
@@ -532,117 +449,6 @@ def plot_spike_times_histogram(output_spike_times, layer_name, t_max=24.0):
         print(f"  Average spike time: {np.mean(fired_spikes):.2f}")
         print(f"  Earliest spike: {np.min(fired_spikes):.2f}")
         print(f"  Latest spike: {np.max(fired_spikes):.2f}")
-
-# Usage
-
-
-# def call_spiking_temporal(tj, W, D_i, t_min_prev, t_min, t_max, robustness_params, layer_index):
-#     """
-#     Vectorized version of paper's TTFS model
-#     """
-#     batch_size = tf.shape(tj)[0] # 1024 * 27
-#     output_size = tf.shape(W)[1] # 27 * 64
-    
-#     # Initialize all neurons to fire at t_max (no spike)
-#     output_spike_times = tf.ones((batch_size, output_size), dtype=tf.float32) * t_max
-    
-#     # Paper uses B1-model: B_i = 1 for all neurons
-#     B_i = 1.0
-    
-#     # Create mask for spikes that arrive before t_min
-#     # Shape: (batch_size, input_size)
-#     valid_spikes_mask = tj < t_min
-    
-#     # Calculate V_at_t_min for all neurons and batches
-#     # V_at_t_min = sum_j W_ij * (t_min - t_j) for t_j < t_min
-#     t_min_broadcast = tf.reshape(tf.constant(t_min, dtype=tf.float32), (1, 1))
-#     time_differences = t_min_broadcast - tj  # (batch_size, input_size)
-    
-#     # Set invalid spikes to 0 contribution
-#     time_differences = tf.where(valid_spikes_mask, time_differences, 0.0)
-    
-#     # Matrix multiplication: (batch_size, input_size) @ (input_size, output_size)
-#     # Result: (batch_size, output_size) - membrane potential at t_min for each neuron
-#     V_at_t_min = tf.matmul(time_differences, W)
-    
-#     # Calculate spike times for neurons that fire in first regime (immediately at t_min)
-#     fires_immediately = V_at_t_min >= D_i
-#     t_immediate = tf.ones_like(V_at_t_min) * t_min
-    
-#     # Calculate spike times for neurons that fire in second regime
-#     t_second_regime = t_min + (D_i - V_at_t_min) / B_i
-    
-#     # Combine: use immediate firing if V_at_t_min >= threshold, else use second regime
-#     t_spike = tf.where(fires_immediately, t_immediate, t_second_regime)
-    
-#     # Only keep spikes that occur before t_max
-#     valid_spikes = t_spike < t_max
-#     output_spike_times = tf.where(valid_spikes, t_spike, output_spike_times)
-    
-#     # Statistics
-#     fired_count = tf.reduce_sum(tf.cast(valid_spikes, tf.float32))
-#     total_count = tf.cast(tf.size(output_spike_times), tf.float32)
-#     firing_rate = (fired_count / total_count) * 100
-    
-#     print(f"  TTFS {layer_index}: {firing_rate:.1f}% neurons fired")
-    
-#     return output_spike_times
-
-
-# def call_spiking_temporal(tj, W, D_i, t_min_prev, t_min, t_max, robustness_params, layer_index):
-
-#     # Calculate the spiking threshold (Eq. 18)
-#     threshold = t_max - t_min - D_i
-#     # Calculate output spiking time ti (Eq. 7)
-#     ti = (tf.matmul(tj-t_min, W) + threshold + t_min)
-#     # Ensure valid spiking time. Do not spike for ti >= t_max.
-#     # No spike is modelled as t_max that cancels out in the next layer (tj-t_min) as t_min there is t_max
-#     ti = tf.where(ti < t_max, ti, t_max)
-#     # Add noise to the spiking time for noise simulations
-#     # ti = ti + tf.random.normal(tf.shape(ti), stddev=robustness_params['noise'], dtype=tf.dtypes.float64)
-#     return ti
-
-
-# def call_spiking_temporal(tj, W, D_i, t_min_prev, t_min, t_max, robustness_params, layer_index):
-#     batch_size = tf.shape(tj)[0]
-#     output_size = tf.shape(W)[1]
-    
-#     output_spike_times = tf.ones((batch_size, output_size), dtype=tf.float32) * t_max
-#     B_i = 1.0
-    
-#       # FIX: Special handling for first layer
-#     if layer_index == 1:
-#         # Input spikes are in [0, 24], but layer 1 window is [0, 8]
-#         # Only process spikes that arrive during layer 1's window
-#         valid_spikes_mask = (tj >= t_min) & (tj < t_max)  # Spikes in [0, 8]
-#     else:
-#         # Other layers: paper's standard condition
-#         valid_spikes_mask = (tj < t_min)
-    
-#     # FIX 2: Paper's exact membrane potential calculation
-#     # V_at_t_min = sum_j W_ij * (t_min - t_j) for t_j < t_min
-#     time_contributions = t_min - tj  # How long each spike had to contribute
-#     time_contributions = tf.where(valid_spikes_mask, time_contributions, 0.0)
-    
-#     V_at_t_min = tf.matmul(time_contributions, W)
-    
-#     # FIX 3: Paper's spike time calculation (no tf.maximum on V_at_t_min)
-#     # Negative V_at_t_min is valid - means neuron is far from threshold
-    
-#     fires_immediately = V_at_t_min >= D_i
-#     t_immediate = tf.ones_like(V_at_t_min) * t_min
-    
-#     # Paper's equation: t_spike = t_min + (D_i - V_at_t_min) / B_i
-#     t_second_regime = t_min + (D_i - V_at_t_min) / B_i
-    
-#     t_spike = tf.where(fires_immediately, t_immediate, t_second_regime)
-    
-#     # FIX 4: Only enforce t_min as lower bound for immediate fires
-#     # For second regime, t_spike might be < t_min if V_at_t_min > D_i
-#     valid_spikes = (t_spike >= t_min) & (t_spike < t_max)
-#     output_spike_times = tf.where(valid_spikes, t_spike, output_spike_times)
-    
-#     return output_spike_times
 
 
 
@@ -781,7 +587,7 @@ class SpikingConv2D(tf.keras.layers.Layer):
     #     print(f"Layer {layer_index}: Output range {tf.reduce_min(ti):.1f} to {tf.reduce_max(ti):.1f}")
     #     return ti
     
-    def call(self, tj , layer_index):
+    def call(self, tj , ):
         """
         Input spiking times tj, output spiking times ti. 
         """
@@ -1008,14 +814,14 @@ class SpikeMonitorCallback(tf.keras.callbacks.Callback):
     def on_epoch_end(self, epoch, logs=None):
         ti = self.x_sample
         for layer in self.model.conv_layers:
-            ti = layer(ti,1 )
+            ti = layer(ti )
             if isinstance(layer, SpikingConv2D):
                 with self.file_writer.as_default():
                     tf.summary.histogram(f"{layer.name}_spikes", ti, step=epoch)
         
         ti = self.model.flatten(ti)
         for layer in self.model.dense_layers:
-            ti = layer(ti, 1)
+            ti = layer(ti)
             if isinstance(layer, SpikingDense):
                 with self.file_writer.as_default():
                     tf.summary.histogram(f"{layer.name}_spikes", ti, step=epoch)
