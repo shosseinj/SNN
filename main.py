@@ -587,10 +587,7 @@ class SpikingConv2D(tf.keras.layers.Layer):
         """
         Input spiking times tj, output spiking times ti using TEMPORAL SIMULATION
         """
-        # print(f"Layer {layer_index}: Temporal simulation - Input range {tf.reduce_min(tj):.1f} to {tf.reduce_max(tj):.1f}")
-        # print(f"Layer {layer_index}: Processing window {self.t_min:.1f} to {self.t_max:.1f}")
 
-        # Image size calculations
         padding_size, image_same_size = int(self.padding=='same')*(self.kernel_size[0]//2), tf.shape(tj)[1] 
         image_valid_size = image_same_size - self.kernel_size[0] + 1
         
