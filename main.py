@@ -453,93 +453,248 @@ class SpikingDense(tf.keras.layers.Layer):
 
            
         return output
-# def call_spiking(tj, W, D_i, t_min_prev, t_min, t_max, robustness_params):
-#     # This is direct conversion, not temporal simulation
-#     threshold = t_max - t_min - D_i
-#     ti = (tf.matmul(tj-t_min, W) + threshold + t_min)  # Direct calculation
-#     ti = tf.where(ti < t_max, ti, t_max)  # Clamp to max
-#     return ti
+
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+def plot_spike_times_histogram(output_spike_times, layer_name, t_max=24.0):
+    """Plot histogram of when neurons fired"""
+    spike_times_np = output_spike_times.numpy().flatten()
+    
+    plt.figure(figsize=(10, 6))
+    
+    # Separate fired vs never-fired neurons
+    fired_spikes = spike_times_np[spike_times_np < t_max]
+    never_fired = spike_times_np[spike_times_np >= t_max]
+    
+    plt.hist(fired_spikes, bins=50, alpha=0.7, label=f'Fired neurons ({len(fired_spikes)})')
+    plt.axvline(x=t_max, color='red', linestyle='--', label=f'Never fired ({len(never_fired)})')
+    
+    plt.xlabel('Spike Time')
+    plt.ylabel('Number of Neurons')
+    plt.title(f'Spike Time Distribution - {layer_name}')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.show()
+    
+    # Print statistics
+    print(f"{layer_name} Statistics:")
+    print(f"  Total neurons: {len(spike_times_np)}")
+    print(f"  Fired neurons: {len(fired_spikes)} ({len(fired_spikes)/len(spike_times_np)*100:.1f}%)")
+    print(f"  Never fired: {len(never_fired)} ({len(never_fired)/len(spike_times_np)*100:.1f}%)")
+    if len(fired_spikes) > 0:
+        print(f"  Average spike time: {np.mean(fired_spikes):.2f}")
+        print(f"  Earliest spike: {np.min(fired_spikes):.2f}")
+        print(f"  Latest spike: {np.max(fired_spikes):.2f}")
+
+# Usage
+
+# def call_spiking_temporal(tj, W, D_i, t_min_prev, t_min, t_max, robustness_params, layer_index):
+#     """
+#     Temporal simulation version - processes time step by step
+#     """
+#     batch_size = tf.shape(tj)[0]
+#     input_size = tf.shape(tj)[1]
+#     output_size = tf.shape(W)[1]
+    
+# # Initialize outputs - use a value LARGER than t_max to indicate "never fired"
+#     NEVER_FIRED_SENTINEL = t_max + 1000.0  # Any value larger than max possible time
+#     output_spike_times = tf.ones((batch_size, output_size), dtype=tf.float32) * NEVER_FIRED_SENTINEL
+#     membrane_potential = tf.zeros((batch_size, output_size), dtype=tf.float32)
+#     has_fired = tf.zeros((batch_size, output_size), dtype=tf.bool)
+
+#     # Use fine-grained simulation within the time window
+#     simulation_steps = 100
+#     dt = (t_max - t_min) / simulation_steps
+
+#     print(f"  Temporal {layer_index}: {simulation_steps} steps, dt={dt:.4f}")
+
+#     for step in range(simulation_steps):
+#         current_time = t_min + step * dt
+#         next_time = t_min + (step + 1) * dt
+#         current_time_float = tf.cast(current_time, tf.float32)
+        
+#         # Find input spikes in current simulation step
+#         spikes_in_step = (tj >= current_time_float) & (tj < next_time)
+#         spikes_in_step = tf.cast(spikes_in_step, tf.float32)
+        
+#         if tf.reduce_sum(spikes_in_step) > 0:
+#             # Add to membrane potential
+#             current_input = tf.matmul(spikes_in_step, W)
+            
+#             # Only update neurons that haven't fired yet
+#             not_fired_mask = tf.cast(~has_fired, tf.float32)
+#             membrane_potential += current_input * not_fired_mask
+            
+#             # Check for firing
+#             min_threshold = current_time_float + 0.000001  # Can't fire before next step
+#             safe_threshold = tf.maximum(D_i, min_threshold)
+#             fires_now = (membrane_potential >= D_i) & ~has_fired
+            
+#             if tf.reduce_any(fires_now):
+#                 output_spike_times = tf.where(
+#                     fires_now,
+#                     current_time_float,  # Set actual spike time
+#                     output_spike_times   # Keep existing value
+#                 )
+#                 has_fired = tf.logical_or(has_fired, fires_now)
+
+#     # After simulation, clamp any remaining sentinel values to t_max
+#     output_spike_times = tf.where(
+#         output_spike_times > t_max,  # If sentinel value (never fired)
+#         t_max,                       # Set to t_max
+#         output_spike_times           # Otherwise keep actual spike time
+#     )
+#     # Apply robustness features (keep your existing quantization and noise)
+#     # if robustness_params.get('time_bits', 0) != 0:
+#     #     output_spike_times = tf.quantization.fake_quant_with_min_max_args(
+#     #         output_spike_times,
+#     #         min=float(t_min),
+#     #         max=float(t_max),
+#     #         num_bits=robustness_params['time_bits']
+#     #     )
+    
+#     # if robustness_params.get('noise', 0) > 0:
+#     #     output_spike_times += tf.random.normal(
+#     #         tf.shape(output_spike_times), 
+#     #         stddev=robustness_params['noise'], 
+#     #         dtype=output_spike_times.dtype
+#     #     )
+#     #     output_spike_times = tf.clip_by_value(output_spike_times, float(t_min), float(t_max))
+    
+#     # Statistics
+#     fired_count = tf.reduce_sum(tf.cast(output_spike_times < t_max, tf.float32))
+#     total_count = tf.cast(tf.size(output_spike_times), tf.float32)
+#     firing_rate = (fired_count / total_count) * 100
+    
+#     print(f"  Temporal {layer_index}: {firing_rate:.1f}% neurons fired")
+    
+#     return output_spike_times
+
+
+# def call_spiking_temporal(tj, W, D_i, t_min_prev, t_min, t_max, robustness_params, layer_index):
+#     """
+#     Paper-accurate TTFS implementation
+#     """
+#     batch_size = tf.shape(tj)[0]
+#     input_size = tf.shape(tj)[1] 
+#     output_size = tf.shape(W)[1]
+    
+#     # Paper uses t_max as "no spike" indicator
+#     NEVER_FIRED_SENTINEL = t_max
+#     output_spike_times = tf.ones((batch_size, output_size), dtype=tf.float32) * NEVER_FIRED_SENTINEL
+    
+#     # Paper parameters: A_i^(n) = 0, B_i^(n) = 1 (B1-model)
+#     A_i = 0.0  # Initial slope
+#     B_i = 1.0  # Second regime slope (Identity Mapping)
+    
+#     # For each output neuron
+#     for i in range(output_size):
+#         # Get weights for this neuron
+#         W_i = W[:, i]  # shape: (input_size,)
+        
+#         # For each sample in batch
+#         for b in range(batch_size):
+#             # Get input spike times for this sample
+#             tj_b = tj[b]  # shape: (input_size,)
+            
+#             # Filter only spikes that arrived before t_min
+#             valid_spikes_mask = tj_b < t_min
+#             valid_tj = tf.boolean_mask(tj_b, valid_spikes_mask)
+#             valid_W = tf.boolean_mask(W_i, valid_spikes_mask)
+            
+#             if tf.size(valid_tj) > 0:
+#                 # Calculate membrane potential at t_min (Eq. 1 from paper)
+#                 # V_i(t_min) = sum_{j} W_ij * (t_min - t_j) for t_j < t_min
+#                 V_at_t_min = tf.reduce_sum(valid_W * (t_min - valid_tj))
+                
+#                 # Check if neuron would fire in second regime [t_min, t_max]
+#                 # Spike time equation derived from paper (similar to Eq. 7):
+#                 # V_i(t) = V_at_t_min + B_i * (t - t_min)
+#                 # Spike when: V_i(t_spike) = threshold D_i
+#                 if V_at_t_min >= D_i:
+#                     # Fires immediately at t_min
+#                     t_spike = t_min
+#                 else:
+#                     # Solve for spike time in second regime
+#                     t_spike = t_min + (D_i - V_at_t_min) / B_i
+                    
+#                     # Check if spike occurs within valid time window
+#                     if t_spike > t_max:
+#                         t_spike = t_max  # No spike
+                
+#                 # Only record if spike occurs before t_max
+#                 if t_spike < t_max:
+#                     output_spike_times = tf.tensor_scatter_nd_update(
+#                         output_spike_times, 
+#                         [[b, i]], 
+#                         [t_spike]
+#                     )
+    
+#     # Apply robustness features if needed
+#     if robustness_params.get('time_bits', 0) != 0:
+#         # Your quantization code here
+#         pass
+        
+#     if robustness_params.get('noise', 0) > 0:
+#         # Your noise code here  
+#         pass
+    
+#     return output_spike_times
+
 def call_spiking_temporal(tj, W, D_i, t_min_prev, t_min, t_max, robustness_params, layer_index):
     """
-    Temporal simulation version - processes time step by step
+    Vectorized version of paper's TTFS model
     """
     batch_size = tf.shape(tj)[0]
-    input_size = tf.shape(tj)[1]
     output_size = tf.shape(W)[1]
     
-# Initialize outputs - use a value LARGER than t_max to indicate "never fired"
-    NEVER_FIRED_SENTINEL = t_max + 1000.0  # Any value larger than max possible time
-    output_spike_times = tf.ones((batch_size, output_size), dtype=tf.float32) * NEVER_FIRED_SENTINEL
-    membrane_potential = tf.zeros((batch_size, output_size), dtype=tf.float32)
-    has_fired = tf.zeros((batch_size, output_size), dtype=tf.bool)
-
-    # Use fine-grained simulation within the time window
-    simulation_steps = 100
-    dt = (t_max - t_min) / simulation_steps
-
-    print(f"  Temporal {layer_index}: {simulation_steps} steps, dt={dt:.4f}")
-
-    for step in range(simulation_steps):
-        current_time = t_min + step * dt
-        next_time = t_min + (step + 1) * dt
-        current_time_float = tf.cast(current_time, tf.float32)
-        
-        # Find input spikes in current simulation step
-        spikes_in_step = (tj >= current_time_float) & (tj < next_time)
-        spikes_in_step = tf.cast(spikes_in_step, tf.float32)
-        
-        if tf.reduce_sum(spikes_in_step) > 0:
-            # Add to membrane potential
-            current_input = tf.matmul(spikes_in_step, W)
-            
-            # Only update neurons that haven't fired yet
-            not_fired_mask = tf.cast(~has_fired, tf.float32)
-            membrane_potential += current_input * not_fired_mask
-            
-            # Check for firing
-            min_threshold = current_time_float + 0.000001  # Can't fire before next step
-            safe_threshold = tf.maximum(D_i, min_threshold)
-            fires_now = (membrane_potential >= D_i) & ~has_fired
-            
-            if tf.reduce_any(fires_now):
-                output_spike_times = tf.where(
-                    fires_now,
-                    current_time_float,  # Set actual spike time
-                    output_spike_times   # Keep existing value
-                )
-                has_fired = tf.logical_or(has_fired, fires_now)
-
-    # After simulation, clamp any remaining sentinel values to t_max
-    output_spike_times = tf.where(
-        output_spike_times > t_max,  # If sentinel value (never fired)
-        t_max,                       # Set to t_max
-        output_spike_times           # Otherwise keep actual spike time
-    )
-    # Apply robustness features (keep your existing quantization and noise)
-    # if robustness_params.get('time_bits', 0) != 0:
-    #     output_spike_times = tf.quantization.fake_quant_with_min_max_args(
-    #         output_spike_times,
-    #         min=float(t_min),
-    #         max=float(t_max),
-    #         num_bits=robustness_params['time_bits']
-    #     )
+    # Initialize all neurons to fire at t_max (no spike)
+    output_spike_times = tf.ones((batch_size, output_size), dtype=tf.float32) * t_max
     
-    # if robustness_params.get('noise', 0) > 0:
-    #     output_spike_times += tf.random.normal(
-    #         tf.shape(output_spike_times), 
-    #         stddev=robustness_params['noise'], 
-    #         dtype=output_spike_times.dtype
-    #     )
-    #     output_spike_times = tf.clip_by_value(output_spike_times, float(t_min), float(t_max))
+    # Paper uses B1-model: B_i = 1 for all neurons
+    B_i = 1.0
+    
+    # Create mask for spikes that arrive before t_min
+    # Shape: (batch_size, input_size)
+    valid_spikes_mask = tj < t_min
+    
+    # Calculate V_at_t_min for all neurons and batches
+    # V_at_t_min = sum_j W_ij * (t_min - t_j) for t_j < t_min
+    t_min_broadcast = tf.reshape(tf.constant(t_min, dtype=tf.float32), (1, 1))
+    time_differences = t_min_broadcast - tj  # (batch_size, input_size)
+    
+    # Set invalid spikes to 0 contribution
+    time_differences = tf.where(valid_spikes_mask, time_differences, 0.0)
+    
+    # Matrix multiplication: (batch_size, input_size) @ (input_size, output_size)
+    # Result: (batch_size, output_size) - membrane potential at t_min for each neuron
+    V_at_t_min = tf.matmul(time_differences, W)
+    
+    # Calculate spike times for neurons that fire in first regime (immediately at t_min)
+    fires_immediately = V_at_t_min >= D_i
+    t_immediate = tf.ones_like(V_at_t_min) * t_min
+    
+    # Calculate spike times for neurons that fire in second regime
+    t_second_regime = t_min + (D_i - V_at_t_min) / B_i
+    
+    # Combine: use immediate firing if V_at_t_min >= threshold, else use second regime
+    t_spike = tf.where(fires_immediately, t_immediate, t_second_regime)
+    
+    # Only keep spikes that occur before t_max
+    valid_spikes = t_spike < t_max
+    output_spike_times = tf.where(valid_spikes, t_spike, output_spike_times)
     
     # Statistics
-    fired_count = tf.reduce_sum(tf.cast(output_spike_times < t_max, tf.float32))
+    fired_count = tf.reduce_sum(tf.cast(valid_spikes, tf.float32))
     total_count = tf.cast(tf.size(output_spike_times), tf.float32)
     firing_rate = (fired_count / total_count) * 100
     
-    print(f"  Temporal {layer_index}: {firing_rate:.1f}% neurons fired")
+    print(f"  TTFS {layer_index}: {firing_rate:.1f}% neurons fired")
     
     return output_spike_times
+
 
 
 class SpikingConv2D(tf.keras.layers.Layer):
