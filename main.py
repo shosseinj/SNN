@@ -810,7 +810,7 @@ class SpikingConv2D(tf.keras.layers.Layer):
             for i, tj_part in enumerate(tj_partitioned):
                 # Iterate over 9 different partitions and call call_spiking with different threshold value.
                 tj_part = tf.reshape(tj_part, (-1, tf.shape(W)[0]))
-                ti_part = call_spiking(tj_part, W, self.D_i[i], self.t_min_prev, self.t_min, self.t_max, noise=self.noise)
+                ti_part = call_spiking(tj_part, W, self.D_i[i], self.t_min_prev, self.t_min, self.t_max)
                 # Partitions are reshaped back.
                 if i==0: ti_part=tf.reshape(ti_part, (-1, image_valid_size, image_valid_size, self.filters))
                 if i in [1, 3, 5, 7]: ti_part=tf.reshape(ti_part, (-1, 1, 1, self.filters))
@@ -1008,14 +1008,14 @@ class SpikeMonitorCallback(tf.keras.callbacks.Callback):
     def on_epoch_end(self, epoch, logs=None):
         ti = self.x_sample
         for layer in self.model.conv_layers:
-            ti = layer(ti)
+            ti = layer(ti,1 )
             if isinstance(layer, SpikingConv2D):
                 with self.file_writer.as_default():
                     tf.summary.histogram(f"{layer.name}_spikes", ti, step=epoch)
         
         ti = self.model.flatten(ti)
         for layer in self.model.dense_layers:
-            ti = layer(ti)
+            ti = layer(ti, 1)
             if isinstance(layer, SpikingDense):
                 with self.file_writer.as_default():
                     tf.summary.histogram(f"{layer.name}_spikes", ti, step=epoch)
