@@ -406,6 +406,24 @@ class MaxMinPool2D(tf.keras.layers.MaxPool2D):
 
 #     return tf.clip_by_value(ti, t_min, t_max)
 
+def call_spiking(tj, W, D_i, t_min_prev, t_min, t_max):
+    """
+    Calculates spiking times from which ReLU functionality can be recovered.
+    Assumes tau_c=1 and B_i^(n)=1
+    """
+
+
+    # Calculate the spiking threshold (Eq. 18)
+    threshold = t_max - t_min - D_i
+    # Calculate output spiking time ti (Eq. 7)
+    ti = (tf.matmul(tj-t_min, W) + threshold + t_min)
+    # Ensure valid spiking time. Do not spike for ti >= t_max.
+    # No spike is modelled as t_max that cancels out in the next layer (tj-t_min) as t_min there is t_max
+    ti = tf.where(ti < t_max, ti, t_max)
+    # Add noise to the spiking time for noise simulations
+    # ti = ti + tf.random.normal(tf.shape(ti), stddev=robustness_params['noise'], dtype=tf.dtypes.float64)
+    return ti
+
 
 class SpikingDense(tf.keras.layers.Layer):
     def __init__(self, units, name, outputLayer=False, robustness_params={}, input_dim=None,
@@ -443,15 +461,13 @@ class SpikingDense(tf.keras.layers.Layer):
         """
         Input spiking times tj, output spiking times ti or the value of membrane potential in case of output layer. 
         """
-        output = call_spiking(tj, self.kernel, self.D_i, self.t_min_prev, self.t_min, self.t_max, self.robustness_params , layer_index)
+        output = call_spiking(tj, self.kernel, self.D_i, self.t_min_prev, self.t_min, self.t_max)
         # In case of the output layer a simple integration is applied without spiking. 
         if self.outputLayer:
             # Read out the value of membrane potential at time t_min.
             W_mult_x = tf.matmul(self.t_min-tj, self.kernel)
             self.alpha = self.D_i/(self.t_min-self.t_min_prev)
             output = self.alpha * (self.t_min - self.t_min_prev) + W_mult_x
-
-           
         return output
 
 
@@ -490,210 +506,115 @@ def plot_spike_times_histogram(output_spike_times, layer_name, t_max=24.0):
 
 # Usage
 
+
 # def call_spiking_temporal(tj, W, D_i, t_min_prev, t_min, t_max, robustness_params, layer_index):
 #     """
-#     Temporal simulation version - processes time step by step
+#     Vectorized version of paper's TTFS model
 #     """
-#     batch_size = tf.shape(tj)[0]
-#     input_size = tf.shape(tj)[1]
-#     output_size = tf.shape(W)[1]
+#     batch_size = tf.shape(tj)[0] # 1024 * 27
+#     output_size = tf.shape(W)[1] # 27 * 64
     
-# # Initialize outputs - use a value LARGER than t_max to indicate "never fired"
-#     NEVER_FIRED_SENTINEL = t_max + 1000.0  # Any value larger than max possible time
-#     output_spike_times = tf.ones((batch_size, output_size), dtype=tf.float32) * NEVER_FIRED_SENTINEL
-#     membrane_potential = tf.zeros((batch_size, output_size), dtype=tf.float32)
-#     has_fired = tf.zeros((batch_size, output_size), dtype=tf.bool)
-
-#     # Use fine-grained simulation within the time window
-#     simulation_steps = 100
-#     dt = (t_max - t_min) / simulation_steps
-
-#     print(f"  Temporal {layer_index}: {simulation_steps} steps, dt={dt:.4f}")
-
-#     for step in range(simulation_steps):
-#         current_time = t_min + step * dt
-#         next_time = t_min + (step + 1) * dt
-#         current_time_float = tf.cast(current_time, tf.float32)
-        
-#         # Find input spikes in current simulation step
-#         spikes_in_step = (tj >= current_time_float) & (tj < next_time)
-#         spikes_in_step = tf.cast(spikes_in_step, tf.float32)
-        
-#         if tf.reduce_sum(spikes_in_step) > 0:
-#             # Add to membrane potential
-#             current_input = tf.matmul(spikes_in_step, W)
-            
-#             # Only update neurons that haven't fired yet
-#             not_fired_mask = tf.cast(~has_fired, tf.float32)
-#             membrane_potential += current_input * not_fired_mask
-            
-#             # Check for firing
-#             min_threshold = current_time_float + 0.000001  # Can't fire before next step
-#             safe_threshold = tf.maximum(D_i, min_threshold)
-#             fires_now = (membrane_potential >= D_i) & ~has_fired
-            
-#             if tf.reduce_any(fires_now):
-#                 output_spike_times = tf.where(
-#                     fires_now,
-#                     current_time_float,  # Set actual spike time
-#                     output_spike_times   # Keep existing value
-#                 )
-#                 has_fired = tf.logical_or(has_fired, fires_now)
-
-#     # After simulation, clamp any remaining sentinel values to t_max
-#     output_spike_times = tf.where(
-#         output_spike_times > t_max,  # If sentinel value (never fired)
-#         t_max,                       # Set to t_max
-#         output_spike_times           # Otherwise keep actual spike time
-#     )
-#     # Apply robustness features (keep your existing quantization and noise)
-#     # if robustness_params.get('time_bits', 0) != 0:
-#     #     output_spike_times = tf.quantization.fake_quant_with_min_max_args(
-#     #         output_spike_times,
-#     #         min=float(t_min),
-#     #         max=float(t_max),
-#     #         num_bits=robustness_params['time_bits']
-#     #     )
+#     # Initialize all neurons to fire at t_max (no spike)
+#     output_spike_times = tf.ones((batch_size, output_size), dtype=tf.float32) * t_max
     
-#     # if robustness_params.get('noise', 0) > 0:
-#     #     output_spike_times += tf.random.normal(
-#     #         tf.shape(output_spike_times), 
-#     #         stddev=robustness_params['noise'], 
-#     #         dtype=output_spike_times.dtype
-#     #     )
-#     #     output_spike_times = tf.clip_by_value(output_spike_times, float(t_min), float(t_max))
+#     # Paper uses B1-model: B_i = 1 for all neurons
+#     B_i = 1.0
+    
+#     # Create mask for spikes that arrive before t_min
+#     # Shape: (batch_size, input_size)
+#     valid_spikes_mask = tj < t_min
+    
+#     # Calculate V_at_t_min for all neurons and batches
+#     # V_at_t_min = sum_j W_ij * (t_min - t_j) for t_j < t_min
+#     t_min_broadcast = tf.reshape(tf.constant(t_min, dtype=tf.float32), (1, 1))
+#     time_differences = t_min_broadcast - tj  # (batch_size, input_size)
+    
+#     # Set invalid spikes to 0 contribution
+#     time_differences = tf.where(valid_spikes_mask, time_differences, 0.0)
+    
+#     # Matrix multiplication: (batch_size, input_size) @ (input_size, output_size)
+#     # Result: (batch_size, output_size) - membrane potential at t_min for each neuron
+#     V_at_t_min = tf.matmul(time_differences, W)
+    
+#     # Calculate spike times for neurons that fire in first regime (immediately at t_min)
+#     fires_immediately = V_at_t_min >= D_i
+#     t_immediate = tf.ones_like(V_at_t_min) * t_min
+    
+#     # Calculate spike times for neurons that fire in second regime
+#     t_second_regime = t_min + (D_i - V_at_t_min) / B_i
+    
+#     # Combine: use immediate firing if V_at_t_min >= threshold, else use second regime
+#     t_spike = tf.where(fires_immediately, t_immediate, t_second_regime)
+    
+#     # Only keep spikes that occur before t_max
+#     valid_spikes = t_spike < t_max
+#     output_spike_times = tf.where(valid_spikes, t_spike, output_spike_times)
     
 #     # Statistics
-#     fired_count = tf.reduce_sum(tf.cast(output_spike_times < t_max, tf.float32))
+#     fired_count = tf.reduce_sum(tf.cast(valid_spikes, tf.float32))
 #     total_count = tf.cast(tf.size(output_spike_times), tf.float32)
 #     firing_rate = (fired_count / total_count) * 100
     
-#     print(f"  Temporal {layer_index}: {firing_rate:.1f}% neurons fired")
+#     print(f"  TTFS {layer_index}: {firing_rate:.1f}% neurons fired")
     
 #     return output_spike_times
 
 
 # def call_spiking_temporal(tj, W, D_i, t_min_prev, t_min, t_max, robustness_params, layer_index):
-#     """
-#     Paper-accurate TTFS implementation
-#     """
+
+#     # Calculate the spiking threshold (Eq. 18)
+#     threshold = t_max - t_min - D_i
+#     # Calculate output spiking time ti (Eq. 7)
+#     ti = (tf.matmul(tj-t_min, W) + threshold + t_min)
+#     # Ensure valid spiking time. Do not spike for ti >= t_max.
+#     # No spike is modelled as t_max that cancels out in the next layer (tj-t_min) as t_min there is t_max
+#     ti = tf.where(ti < t_max, ti, t_max)
+#     # Add noise to the spiking time for noise simulations
+#     # ti = ti + tf.random.normal(tf.shape(ti), stddev=robustness_params['noise'], dtype=tf.dtypes.float64)
+#     return ti
+
+
+# def call_spiking_temporal(tj, W, D_i, t_min_prev, t_min, t_max, robustness_params, layer_index):
 #     batch_size = tf.shape(tj)[0]
-#     input_size = tf.shape(tj)[1] 
 #     output_size = tf.shape(W)[1]
     
-#     # Paper uses t_max as "no spike" indicator
-#     NEVER_FIRED_SENTINEL = t_max
-#     output_spike_times = tf.ones((batch_size, output_size), dtype=tf.float32) * NEVER_FIRED_SENTINEL
+#     output_spike_times = tf.ones((batch_size, output_size), dtype=tf.float32) * t_max
+#     B_i = 1.0
     
-#     # Paper parameters: A_i^(n) = 0, B_i^(n) = 1 (B1-model)
-#     A_i = 0.0  # Initial slope
-#     B_i = 1.0  # Second regime slope (Identity Mapping)
+#       # FIX: Special handling for first layer
+#     if layer_index == 1:
+#         # Input spikes are in [0, 24], but layer 1 window is [0, 8]
+#         # Only process spikes that arrive during layer 1's window
+#         valid_spikes_mask = (tj >= t_min) & (tj < t_max)  # Spikes in [0, 8]
+#     else:
+#         # Other layers: paper's standard condition
+#         valid_spikes_mask = (tj < t_min)
     
-#     # For each output neuron
-#     for i in range(output_size):
-#         # Get weights for this neuron
-#         W_i = W[:, i]  # shape: (input_size,)
-        
-#         # For each sample in batch
-#         for b in range(batch_size):
-#             # Get input spike times for this sample
-#             tj_b = tj[b]  # shape: (input_size,)
-            
-#             # Filter only spikes that arrived before t_min
-#             valid_spikes_mask = tj_b < t_min
-#             valid_tj = tf.boolean_mask(tj_b, valid_spikes_mask)
-#             valid_W = tf.boolean_mask(W_i, valid_spikes_mask)
-            
-#             if tf.size(valid_tj) > 0:
-#                 # Calculate membrane potential at t_min (Eq. 1 from paper)
-#                 # V_i(t_min) = sum_{j} W_ij * (t_min - t_j) for t_j < t_min
-#                 V_at_t_min = tf.reduce_sum(valid_W * (t_min - valid_tj))
-                
-#                 # Check if neuron would fire in second regime [t_min, t_max]
-#                 # Spike time equation derived from paper (similar to Eq. 7):
-#                 # V_i(t) = V_at_t_min + B_i * (t - t_min)
-#                 # Spike when: V_i(t_spike) = threshold D_i
-#                 if V_at_t_min >= D_i:
-#                     # Fires immediately at t_min
-#                     t_spike = t_min
-#                 else:
-#                     # Solve for spike time in second regime
-#                     t_spike = t_min + (D_i - V_at_t_min) / B_i
-                    
-#                     # Check if spike occurs within valid time window
-#                     if t_spike > t_max:
-#                         t_spike = t_max  # No spike
-                
-#                 # Only record if spike occurs before t_max
-#                 if t_spike < t_max:
-#                     output_spike_times = tf.tensor_scatter_nd_update(
-#                         output_spike_times, 
-#                         [[b, i]], 
-#                         [t_spike]
-#                     )
+#     # FIX 2: Paper's exact membrane potential calculation
+#     # V_at_t_min = sum_j W_ij * (t_min - t_j) for t_j < t_min
+#     time_contributions = t_min - tj  # How long each spike had to contribute
+#     time_contributions = tf.where(valid_spikes_mask, time_contributions, 0.0)
     
-#     # Apply robustness features if needed
-#     if robustness_params.get('time_bits', 0) != 0:
-#         # Your quantization code here
-#         pass
-        
-#     if robustness_params.get('noise', 0) > 0:
-#         # Your noise code here  
-#         pass
+#     V_at_t_min = tf.matmul(time_contributions, W)
+    
+#     # FIX 3: Paper's spike time calculation (no tf.maximum on V_at_t_min)
+#     # Negative V_at_t_min is valid - means neuron is far from threshold
+    
+#     fires_immediately = V_at_t_min >= D_i
+#     t_immediate = tf.ones_like(V_at_t_min) * t_min
+    
+#     # Paper's equation: t_spike = t_min + (D_i - V_at_t_min) / B_i
+#     t_second_regime = t_min + (D_i - V_at_t_min) / B_i
+    
+#     t_spike = tf.where(fires_immediately, t_immediate, t_second_regime)
+    
+#     # FIX 4: Only enforce t_min as lower bound for immediate fires
+#     # For second regime, t_spike might be < t_min if V_at_t_min > D_i
+#     valid_spikes = (t_spike >= t_min) & (t_spike < t_max)
+#     output_spike_times = tf.where(valid_spikes, t_spike, output_spike_times)
     
 #     return output_spike_times
 
-def call_spiking_temporal(tj, W, D_i, t_min_prev, t_min, t_max, robustness_params, layer_index):
-    """
-    Vectorized version of paper's TTFS model
-    """
-    batch_size = tf.shape(tj)[0]
-    output_size = tf.shape(W)[1]
-    
-    # Initialize all neurons to fire at t_max (no spike)
-    output_spike_times = tf.ones((batch_size, output_size), dtype=tf.float32) * t_max
-    
-    # Paper uses B1-model: B_i = 1 for all neurons
-    B_i = 1.0
-    
-    # Create mask for spikes that arrive before t_min
-    # Shape: (batch_size, input_size)
-    valid_spikes_mask = tj < t_min
-    
-    # Calculate V_at_t_min for all neurons and batches
-    # V_at_t_min = sum_j W_ij * (t_min - t_j) for t_j < t_min
-    t_min_broadcast = tf.reshape(tf.constant(t_min, dtype=tf.float32), (1, 1))
-    time_differences = t_min_broadcast - tj  # (batch_size, input_size)
-    
-    # Set invalid spikes to 0 contribution
-    time_differences = tf.where(valid_spikes_mask, time_differences, 0.0)
-    
-    # Matrix multiplication: (batch_size, input_size) @ (input_size, output_size)
-    # Result: (batch_size, output_size) - membrane potential at t_min for each neuron
-    V_at_t_min = tf.matmul(time_differences, W)
-    
-    # Calculate spike times for neurons that fire in first regime (immediately at t_min)
-    fires_immediately = V_at_t_min >= D_i
-    t_immediate = tf.ones_like(V_at_t_min) * t_min
-    
-    # Calculate spike times for neurons that fire in second regime
-    t_second_regime = t_min + (D_i - V_at_t_min) / B_i
-    
-    # Combine: use immediate firing if V_at_t_min >= threshold, else use second regime
-    t_spike = tf.where(fires_immediately, t_immediate, t_second_regime)
-    
-    # Only keep spikes that occur before t_max
-    valid_spikes = t_spike < t_max
-    output_spike_times = tf.where(valid_spikes, t_spike, output_spike_times)
-    
-    # Statistics
-    fired_count = tf.reduce_sum(tf.cast(valid_spikes, tf.float32))
-    total_count = tf.cast(tf.size(output_spike_times), tf.float32)
-    firing_rate = (fired_count / total_count) * 100
-    
-    print(f"  TTFS {layer_index}: {firing_rate:.1f}% neurons fired")
-    
-    return output_spike_times
 
 
 
@@ -738,97 +659,145 @@ class SpikingConv2D(tf.keras.layers.Layer):
      
 
 
-    def call(self, tj, layer_index):
-        """
-        Input spiking times tj, output spiking times ti using TEMPORAL SIMULATION
-        """
+    # def call(self, tj, layer_index):
+    #     """
+    #     Input spiking times tj, output spiking times ti using TEMPORAL SIMULATION
+    #     """
 
+    #     padding_size, image_same_size = int(self.padding=='same')*(self.kernel_size[0]//2), tf.shape(tj)[1] 
+    #     image_valid_size = image_same_size - self.kernel_size[0] + 1
+        
+    #     # Pad input with t_min value
+    #     padding_value = float(self.t_min)
+    #     tj = tf.pad(
+    #         tj,
+    #         tf.constant([[0, 0], [padding_size, padding_size], [padding_size, padding_size], [0, 0]]),
+    #         constant_values=padding_value
+    #     )
+
+    #     # Extract image patches
+    #     tj_patches = tf.image.extract_patches(
+    #         tj, 
+    #         sizes=[1, self.kernel_size[0], self.kernel_size[1], 1], 
+    #         strides=[1, 1, 1, 1], 
+    #         rates=[1, 1, 1, 1], 
+    #         padding='VALID'
+    #     )
+        
+    #     # Reshape weights
+    #     W = tf.reshape(self.kernel, (-1, self.filters))
+    #     batch_size = tf.shape(tj_patches)[0]
+    #     spatial_h = tf.shape(tj_patches)[1]
+    #     spatial_w = tf.shape(tj_patches)[2]
+        
+    #     if self.padding=='valid' or self.BN!=1 or self.BN_before_ReLU==1: 
+    #         # Single threshold for entire image
+    #         tj_flat = tf.reshape(tj_patches, [-1, tf.shape(W)[0]])
+            
+    #         # USE TEMPORAL SIMULATION instead of call_spiking
+    #         ti_flat = call_spiking_temporal(
+    #             tj_flat, W, self.D_i[0], 
+    #             self.t_min_prev, self.t_min, self.t_max, 
+    #             self.robustness_params, layer_index
+    #         )
+            
+    #         # Reshape back to spatial dimensions
+    #         if self.padding=='valid':
+    #             ti = tf.reshape(ti_flat, [batch_size, image_valid_size, image_valid_size, self.filters])
+    #         else:
+    #             ti = tf.reshape(ti_flat, [batch_size, image_same_size, image_same_size, self.filters])
+                
+    #     else:
+    #         # Multiple thresholds for different image partitions
+    #         tj_partitioned = [
+    #             tj[:, 1:-1, 1:-1, :], tj[:, :1, :1, :], tj[:, :1, 1:-1, :], 
+    #             tj[:, :1, -1:, :], tj[:, 1:-1, -1:, :], tj[:, -1:, -1:, :],
+    #             tj[:, -1:, 1:-1, :], tj[:, -1:, :1, :], tj[:, 1:-1, :1, :]
+    #         ]
+            
+    #         ti_partitioned = []
+    #         for i, tj_part in enumerate(tj_partitioned):
+    #             tj_part_flat = tf.reshape(tj_part, [-1, tf.shape(W)[0]])
+                
+    #             # USE TEMPORAL SIMULATION for each partition
+    #             ti_part_flat = call_spiking_temporal(
+    #                 tj_part_flat, W, self.D_i[i],
+    #                 self.t_min_prev, self.t_min, self.t_max,
+    #                 self.robustness_params, f"{layer_index}_part{i}"
+    #             )
+                
+    #             # Reshape partitions back
+    #             if i == 0: 
+    #                 ti_part = tf.reshape(ti_part_flat, [-1, image_valid_size, image_valid_size, self.filters])
+    #             elif i in [1, 3, 5, 7]: 
+    #                 ti_part = tf.reshape(ti_part_flat, [-1, 1, 1, self.filters])
+    #             elif i in [2, 6]: 
+    #                 ti_part = tf.reshape(ti_part_flat, [-1, 1, image_valid_size, self.filters])
+    #             elif i in [4, 8]: 
+    #                 ti_part = tf.reshape(ti_part_flat, [-1, image_valid_size, 1, self.filters])
+                
+    #             ti_partitioned.append(ti_part)
+            
+    #         # Reconstruct full output from partitions
+    #         if image_valid_size > 0:
+    #             ti_top_row = tf.concat([ti_partitioned[1], ti_partitioned[2], ti_partitioned[3]], axis=2)
+    #             ti_middle = tf.concat([ti_partitioned[8], ti_partitioned[0], ti_partitioned[4]], axis=2)
+    #             ti_bottom_row = tf.concat([ti_partitioned[7], ti_partitioned[6], ti_partitioned[5]], axis=2)
+    #             ti = tf.concat([ti_top_row, ti_middle, ti_bottom_row], axis=1)
+    #         else:
+    #             ti_top_row = tf.concat([ti_partitioned[1], ti_partitioned[3]], axis=2)
+    #             ti_bottom_row = tf.concat([ti_partitioned[7], ti_partitioned[5]], axis=2)
+    #             ti = tf.concat([ti_top_row, ti_bottom_row], axis=1)
+        
+    #     print(f"Layer {layer_index}: Output range {tf.reduce_min(ti):.1f} to {tf.reduce_max(ti):.1f}")
+    #     return ti
+    
+    def call(self, tj , layer_index):
+        """
+        Input spiking times tj, output spiking times ti. 
+        """
+        # Image size in case of padding='same' or padding='valid'.
         padding_size, image_same_size = int(self.padding=='same')*(self.kernel_size[0]//2), tf.shape(tj)[1] 
-        image_valid_size = image_same_size - self.kernel_size[0] + 1
-        
-        # Pad input with t_min value
-        padding_value = float(self.t_min)
-        tj = tf.pad(
-            tj,
-            tf.constant([[0, 0], [padding_size, padding_size], [padding_size, padding_size], [0, 0]]),
-            constant_values=padding_value
-        )
-
-        # Extract image patches
-        tj_patches = tf.image.extract_patches(
-            tj, 
-            sizes=[1, self.kernel_size[0], self.kernel_size[1], 1], 
-            strides=[1, 1, 1, 1], 
-            rates=[1, 1, 1, 1], 
-            padding='VALID'
-        )
-        
-        # Reshape weights
+        image_valid_size = image_same_size - self.kernel_size[0]+1
+        # Pad input with t_min value, which is equivalent with 0 in ReLU network.
+        tj=tf.pad(tj, tf.constant([[0, 0], [padding_size, padding_size,], [padding_size, padding_size], [0, 0]]), constant_values=self.t_min)
+        # Extract image patches of size (kernel_size, kernel_size). call_spiking function will be called for different patches in parallel.  
+        tj = tf.image.extract_patches(tj, sizes=[1, self.kernel_size[0], self.kernel_size[1], 1], strides=[1, 1, 1, 1], rates=[1, 1, 1, 1], padding='VALID')
+        # We reshape input and weights in order to utilize the same function as for the fully-connected layer.
         W = tf.reshape(self.kernel, (-1, self.filters))
-        batch_size = tf.shape(tj_patches)[0]
-        spatial_h = tf.shape(tj_patches)[1]
-        spatial_w = tf.shape(tj_patches)[2]
-        
         if self.padding=='valid' or self.BN!=1 or self.BN_before_ReLU==1: 
-            # Single threshold for entire image
-            tj_flat = tf.reshape(tj_patches, [-1, tf.shape(W)[0]])
-            
-            # USE TEMPORAL SIMULATION instead of call_spiking
-            ti_flat = call_spiking_temporal(
-                tj_flat, W, self.D_i[0], 
-                self.t_min_prev, self.t_min, self.t_max, 
-                self.robustness_params, layer_index
-            )
-            
-            # Reshape back to spatial dimensions
+            # In this case the threshold is the same for whole input image.
+            tj = tf.reshape(tj, (-1, tf.shape(W)[0]))
+            ti = call_spiking(tj, W, self.D_i[0], self.t_min_prev, self.t_min, self.t_max)
+            # Layer output is reshaped back.
             if self.padding=='valid':
-                ti = tf.reshape(ti_flat, [batch_size, image_valid_size, image_valid_size, self.filters])
+                ti = tf.reshape(ti, (-1, image_valid_size, image_valid_size, self.filters))
             else:
-                ti = tf.reshape(ti_flat, [batch_size, image_same_size, image_same_size, self.filters])
-                
+                ti = tf.reshape(ti, (-1, image_same_size, image_same_size, self.filters))
         else:
-            # Multiple thresholds for different image partitions
-            tj_partitioned = [
-                tj[:, 1:-1, 1:-1, :], tj[:, :1, :1, :], tj[:, :1, 1:-1, :], 
-                tj[:, :1, -1:, :], tj[:, 1:-1, -1:, :], tj[:, -1:, -1:, :],
-                tj[:, -1:, 1:-1, :], tj[:, -1:, :1, :], tj[:, 1:-1, :1, :]
-            ]
-            
-            ti_partitioned = []
+            # In this case there are 9 different thresholds for 9 different image partitions.
+            tj_partitioned = [tj[:, 1:-1, 1:-1, :], tj[:, :1, :1, :], tj[:, :1, 1:-1, :], tj[:, :1, -1:, :], tj[:, 1:-1, -1:, :], tj[:, -1:, -1:, :] , tj[:, -1:, 1:-1, :], tj[:, -1:, :1, :], tj[:, 1:-1, :1, :]]
+            ti_partitioned=[]
             for i, tj_part in enumerate(tj_partitioned):
-                tj_part_flat = tf.reshape(tj_part, [-1, tf.shape(W)[0]])
-                
-                # USE TEMPORAL SIMULATION for each partition
-                ti_part_flat = call_spiking_temporal(
-                    tj_part_flat, W, self.D_i[i],
-                    self.t_min_prev, self.t_min, self.t_max,
-                    self.robustness_params, f"{layer_index}_part{i}"
-                )
-                
-                # Reshape partitions back
-                if i == 0: 
-                    ti_part = tf.reshape(ti_part_flat, [-1, image_valid_size, image_valid_size, self.filters])
-                elif i in [1, 3, 5, 7]: 
-                    ti_part = tf.reshape(ti_part_flat, [-1, 1, 1, self.filters])
-                elif i in [2, 6]: 
-                    ti_part = tf.reshape(ti_part_flat, [-1, 1, image_valid_size, self.filters])
-                elif i in [4, 8]: 
-                    ti_part = tf.reshape(ti_part_flat, [-1, image_valid_size, 1, self.filters])
-                
-                ti_partitioned.append(ti_part)
-            
-            # Reconstruct full output from partitions
-            if image_valid_size > 0:
+                # Iterate over 9 different partitions and call call_spiking with different threshold value.
+                tj_part = tf.reshape(tj_part, (-1, tf.shape(W)[0]))
+                ti_part = call_spiking(tj_part, W, self.D_i[i], self.t_min_prev, self.t_min, self.t_max, noise=self.noise)
+                # Partitions are reshaped back.
+                if i==0: ti_part=tf.reshape(ti_part, (-1, image_valid_size, image_valid_size, self.filters))
+                if i in [1, 3, 5, 7]: ti_part=tf.reshape(ti_part, (-1, 1, 1, self.filters))
+                if i in [2, 6]: ti_part=tf.reshape(ti_part, (-1, 1, image_valid_size, self.filters))
+                if i in [4, 8]: ti_part=tf.reshape(ti_part, (-1, image_valid_size, 1, self.filters))
+                ti_partitioned.append(ti_part) 
+            # Partitions are concatenated to create a complete output.
+            if image_valid_size!=0:
                 ti_top_row = tf.concat([ti_partitioned[1], ti_partitioned[2], ti_partitioned[3]], axis=2)
                 ti_middle = tf.concat([ti_partitioned[8], ti_partitioned[0], ti_partitioned[4]], axis=2)
                 ti_bottom_row = tf.concat([ti_partitioned[7], ti_partitioned[6], ti_partitioned[5]], axis=2)
-                ti = tf.concat([ti_top_row, ti_middle, ti_bottom_row], axis=1)
+                ti = tf.concat([ti_top_row, ti_middle, ti_bottom_row], axis=1)         
             else:
                 ti_top_row = tf.concat([ti_partitioned[1], ti_partitioned[3]], axis=2)
                 ti_bottom_row = tf.concat([ti_partitioned[7], ti_partitioned[5]], axis=2)
-                ti = tf.concat([ti_top_row, ti_bottom_row], axis=1)
-        
-        print(f"Layer {layer_index}: Output range {tf.reduce_min(ti):.1f} to {tf.reduce_max(ti):.1f}")
+                ti = tf.concat([ti_top_row, ti_bottom_row], axis=1)   
         return ti
 
 import matplotlib.pyplot as plt
@@ -987,17 +956,17 @@ class VGG_SNN(tf.keras.Model):
         layer_outputs.append(x)
         layer_names.append("flatten")
         
-        # x = self.dense_1(x , 14)
-        # layer_outputs.append(x)
-        # layer_names.append("dense_1")
+        x = self.dense_1(x , 14)
+        layer_outputs.append(x)
+        layer_names.append("dense_1")
         
-        # out = self.dense_out(x , 15)
-        # layer_outputs.append(out)
-        # layer_names.append("dense_out")
+        out = self.dense_out(x , 15)
+        layer_outputs.append(out)
+        layer_names.append("dense_out")
 
-        plot_all_spike_histograms(layer_outputs[:8], layer_names)
+        # plot_all_spike_histograms(layer_outputs, layer_names)
 
-        return x
+        return out
 
 
 class SpikeMonitorCallback(tf.keras.callbacks.Callback):
@@ -1143,12 +1112,25 @@ def create_model(args, data, optimizer, robustness_params):
         ]
         
         current_time = 0.0
-        window_size=2.0
-        total_time=24
+        total_time = 24.0
+        num_layers = 15
+        time_per_layer = total_time / num_layers  # = 1.6
 
-        for i, layer in enumerate(layers):
-            layer.set_params(t_min_prev=0.0, t_min=0.0, t_max=total_time)
-            print(f"Layer {i+1:2d}: Full window 0.0 to {total_time:.1f}")
+        t_min, t_max = 0, 1  # for the input layer
+        for layer in model.layers:
+            if 'conv' in layer.name or 'dense' in layer.name:
+                t_min, t_max = layer.set_params(t_min, t_max)
+
+                
+        # for i, layer in enumerate(layers):
+        #     t_min_prev = current_time
+        #     t_min = current_time
+        #     t_max = current_time + time_per_layer
+            
+        #     layer.set_params(t_min_prev=t_min_prev, t_min=t_min, t_max=t_max)
+        #     print(f"Layer {i+1:2d}: Window [{t_min:.1f}, {t_max:.1f}]")
+    
+        #     current_time = t_max  # Next layer starts where this one ends
         
         if args.loadWeightANNtoSNN:
           
