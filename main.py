@@ -582,110 +582,6 @@ class SpikingConv2D(tf.keras.layers.Layer):
         self.t_max=tf.Variable(tf.constant(t_max, dtype=tf.float32), trainable=False, name='t_max')
      
 
-    # def call(self, tj, layer_index):
-    #     """
-    #     Input spiking times tj, output spiking times ti. 
-    #     """
-    #     # print(f"Layer {layer_index}: (tj min={tf.reduce_min(tj).numpy()}   - t_min={self.t_min.numpy()}),            (tj max={tf.reduce_max(tj).numpy()} - t_max={self.t_max.numpy()})")
-
-    #     # Image size in case of padding='same' or padding='valid'.
-    #     padding_size, image_same_size = int(self.padding=='same')*(self.kernel_size[0]//2), tf.shape(tj)[1] 
-    #     image_valid_size = image_same_size - self.kernel_size[0]+1
-    #     # Pad input with t_min value, which is equivalent with 0 in ReLU network.
-    #     # tj=tf.pad(tj, tf.constant([[0, 0], [padding_size, padding_size,], [padding_size, padding_size], [0, 0]]), constant_values=self.t_min)
-    #     epsilon = tf.random.uniform((), minval=1e-4, maxval=5e-3, dtype=tj.dtype)
-    #     tj = tf.pad(
-    #         tj,
-    #         tf.constant([[0, 0], [padding_size, padding_size], [padding_size, padding_size], [0, 0]]),
-    #         constant_values=float(self.t_min + epsilon)
-    #     )
-
-            
-
-    #     # Extract image patches of size (kernel_size, kernel_size). call_spiking function will be called for different patches in parallel.  
-    #     tj = tf.image.extract_patches(tj, sizes=[1, self.kernel_size[0], self.kernel_size[1], 1], strides=[1, 1, 1, 1], rates=[1, 1, 1, 1], padding='VALID')
-    #     # We reshape input and weights in order to utilize the same function as for the fully-connected layer.
-    #     W = tf.reshape(self.kernel, (-1, self.filters))
-    #     if self.padding=='valid' or self.BN!=1 or self.BN_before_ReLU==1: 
-    #         # In this case the threshold is the same for whole input image.
-    #         tj = tf.reshape(tj, (-1, tf.shape(W)[0]))
-    #         ti = call_spiking(tj, W, self.D_i[0], self.t_min_prev, self.t_min, self.t_max, self.robustness_params, layer_index)
-    #         # Layer output is reshaped back.
-    #         if self.padding=='valid':
-    #             ti = tf.reshape(ti, (-1, image_valid_size, image_valid_size, self.filters))
-    #         else:
-    #             ti = tf.reshape(ti, (-1, image_same_size, image_same_size, self.filters))
-    #     else:
-    #         # In this case there are 9 different thresholds for 9 different image partitions.
-    #         tj_partitioned = [tj[:, 1:-1, 1:-1, :], tj[:, :1, :1, :], tj[:, :1, 1:-1, :], tj[:, :1, -1:, :], tj[:, 1:-1, -1:, :], tj[:, -1:, -1:, :] , tj[:, -1:, 1:-1, :], tj[:, -1:, :1, :], tj[:, 1:-1, :1, :]]
-    #         ti_partitioned=[]
-    #         for i, tj_part in enumerate(tj_partitioned):
-    #             # Iterate over 9 different partitions and call call_spiking with different threshold value.
-    #             tj_part = tf.reshape(tj_part, (-1, tf.shape(W)[0]))
-    #             ti_part = call_spiking(tj_part, W, self.D_i[i], self.t_min_prev, self.t_min, self.t_max, self.robustness_params)
-    #             # Partitions are reshaped back.
-    #             if i==0: ti_part=tf.reshape(ti_part, (-1, image_valid_size, image_valid_size, self.filters))
-    #             if i in [1, 3, 5, 7]: ti_part=tf.reshape(ti_part, (-1, 1, 1, self.filters))
-    #             if i in [2, 6]: ti_part=tf.reshape(ti_part, (-1, 1, image_valid_size, self.filters))
-    #             if i in [4, 8]: ti_part=tf.reshape(ti_part, (-1, image_valid_size, 1, self.filters))
-    #             ti_partitioned.append(ti_part) 
-    #         # Partitions are concatenated to create a complete output.
-    #         if image_valid_size!=0:
-    #             ti_top_row = tf.concat([ti_partitioned[1], ti_partitioned[2], ti_partitioned[3]], axis=2)
-    #             ti_middle = tf.concat([ti_partitioned[8], ti_partitioned[0], ti_partitioned[4]], axis=2)
-    #             ti_bottom_row = tf.concat([ti_partitioned[7], ti_partitioned[6], ti_partitioned[5]], axis=2)
-    #             ti = tf.concat([ti_top_row, ti_middle, ti_bottom_row], axis=1)         
-    #         else:
-    #             ti_top_row = tf.concat([ti_partitioned[1], ti_partitioned[3]], axis=2)
-    #             ti_bottom_row = tf.concat([ti_partitioned[7], ti_partitioned[5]], axis=2)
-    #             ti = tf.concat([ti_top_row, ti_bottom_row], axis=1)   
-    #     return ti
-
-    # def call(self, tj, layer_index):
-    #     """
-    #     Temporal simulation version
-    #     """
-    #     print(f"Layer {layer_index}: Simulating from t={self.t_min} to t={self.t_max}")
-        
-    #     # Padding with t_min (background/no activity)
-    #     padding_size = int(self.padding=='same') * (self.kernel_size[0] // 2)
-    #     epsilon = tf.random.uniform((), minval=1e-4, maxval=5e-3, dtype=tj.dtype)
-    #     tj = tf.pad(
-    #         tj,
-    #         tf.constant([[0, 0], [padding_size, padding_size], [padding_size, padding_size], [0, 0]]),
-    #         constant_values=float(self.t_min + epsilon)
-    #     )
-        
-    #     # Extract patches
-    #     tj_patches = tf.image.extract_patches(
-    #         tj, 
-    #         sizes=[1, self.kernel_size[0], self.kernel_size[1], 1], 
-    #         strides=[1, 1, 1, 1], 
-    #         rates=[1, 1, 1, 1], 
-    #         padding='VALID'
-    #     )
-        
-    #     # Reshape for processing
-    #     W = tf.reshape(self.kernel, (-1, self.filters))
-    #     batch_size = tf.shape(tj_patches)[0]
-    #     spatial_h = tf.shape(tj_patches)[1]
-    #     spatial_w = tf.shape(tj_patches)[2]
-        
-    #     # Reshape to [batch * spatial_positions, kernel_elements]
-    #     tj_flat = tf.reshape(tj_patches, [-1, tf.shape(W)[0]])
-        
-    #     # Process all spatial positions in parallel using temporal simulation
-    #     ti_flat = call_spiking_temporal(
-    #         tj_flat, W, self.D_i, 
-    #         self.t_min_prev, self.t_min, self.t_max, 
-    #         self.robustness_params, layer_index
-    #     )
-        
-    #     # Reshape back to spatial dimensions
-    #     ti = tf.reshape(ti_flat, [batch_size, spatial_h, spatial_w, self.filters])
-        
-    #     return ti
-
 
     def call(self, tj, layer_index):
         """
@@ -1064,7 +960,7 @@ def create_model(args, data, optimizer, robustness_params):
 
         x = data.x_train[0]                       # shape: (32, 32, 3)
         dummy_input = tf.expand_dims(x, axis=0)   # (1, 32, 32, 3)
-        _ = model(dummy_input)
+     
 
         # X_n= [220.31496, 158.15593, 47.710045, 56.97334, 25.651484, 27.545849, 10.183872, 4.269333, 1.0077846, 0.0, 0.22237545, 0.0, 0.0, 0.1392271, 0.19542684]
         # jafari
@@ -1081,6 +977,8 @@ def create_model(args, data, optimizer, robustness_params):
                     fontsize=12, backgroundcolor='black', ha='left', va='top')
 
             plt.show()
+
+
 
         logging.info("#### Setting SNN intervals ####")
         # X_n=[592.529, 633.0695, 179.3402, 161.51105, 77.85304, 57.72489, 41.515514, 14.545921, 10.4218855, 3.1449182, 0.97689646, 0.0, 0.0, 0.1392271, 0.19542684]
@@ -1100,7 +998,6 @@ def create_model(args, data, optimizer, robustness_params):
             layer.set_params(t_min_prev=0.0, t_min=0.0, t_max=total_time)
             print(f"Layer {i+1:2d}: Full window 0.0 to {total_time:.1f}")
         
-        
         if args.loadWeightANNtoSNN:
           
             ann_conv_layers = [l for l in model_ann.layers if isinstance(l, tf.keras.layers.Conv2D)]
@@ -1109,6 +1006,20 @@ def create_model(args, data, optimizer, robustness_params):
                 # if X_n[idx] > 0:  # avoid division by zero
                 #     scaled_kernel = ann_l.kernel / X_n[idx]
                 # else:
+
+                if idx == 0:
+            # First layer input shape (adjust based on your data)
+                    input_shape = (None, 32, 32, 3)  # Example for CIFAR-10
+                else:
+                    # Calculate input shape based on previous layer
+                    prev_filters = ann_conv_layers[idx-1].filters
+                    # Estimate spatial dimensions (this depends on your architecture)
+                    # For VGG16 with pooling, dimensions get halved periodically
+                    spatial_dim = 32 // (2 ** (idx // 2))  # Rough estimate - adjust as needed
+                    input_shape = (None, spatial_dim, spatial_dim, prev_filters)
+                
+                # THIS IS THE KEY: Call build() to create the kernel
+                snn_l.build(input_shape)
                 scaled_kernel = ann_l.kernel 
                 snn_l.kernel.assign(scaled_kernel)
                 print(f"[INFO] Transferred Conv weights: {ann_l.name} → {snn_l.name}")
@@ -1117,14 +1028,32 @@ def create_model(args, data, optimizer, robustness_params):
             offset = len(ann_conv_layers) 
             ann_dense_layers = [l for l in model_ann.layers if isinstance(l, tf.keras.layers.Dense)]
             snn_dense_layers = model.dense_layers + [model.output_layer]
-            for idx,(ann_l, snn_l) in enumerate(zip(ann_dense_layers, snn_dense_layers)):
-                # if X_n[offset + idx] > 0:
-                #     scaled_kernel = ann_l.kernel / X_n[offset + idx]
-                # else:
+
+            for idx, (ann_l, snn_l) in enumerate(zip(ann_dense_layers, snn_dense_layers)):
+                # MANUALLY CALL build() for dense layers too
+                if idx == 0:
+                    # First dense layer input shape (after flattening conv outputs)
+                    # This depends on your architecture - for VGG16 after conv layers
+                    # Example: if last conv has 512 filters and 1x1 spatial size
+                    input_shape = (None, 512)  # Adjust based on your actual architecture
+                else:
+                    # Subsequent dense layers
+                    input_shape = (None, ann_dense_layers[idx-1].units)
+                
+                # BUILD the dense layer to create the kernel
+                snn_l.build(input_shape)
+                
+                # Now kernel exists and you can assign to it
                 scaled_kernel = ann_l.kernel
                 snn_l.kernel.assign(scaled_kernel)                   
+                print(f"[INFO] Transferred Dense weights: {ann_l.name} → {snn_l.name}")
 
-                print("[INFO] ANN → SNN weight transfer complete")
+            print("[INFO] ANN → SNN weight transfer complete")
+       
+       
+            _ = model(dummy_input)
+
+
 
         # for i, layer in enumerate(layers):
         #     t_min_prev = current_time
