@@ -715,11 +715,11 @@ class VGG_SNN(tf.keras.Model):
 
         layer_outputs.append(x)
         layer_names.append("input_net")
-        x = self.conv_1(x,1)
+        x = self.conv_1(x)
         layer_outputs.append(x)
         layer_names.append("conv_1")
         
-        x = self.conv_2(x,2)
+        x = self.conv_2(x)
         layer_outputs.append(x)
         layer_names.append("conv_2")
         
@@ -727,11 +727,11 @@ class VGG_SNN(tf.keras.Model):
         layer_outputs.append(x)
         layer_names.append("pool_1")
         
-        x = self.conv_3(x , 3)
+        x = self.conv_3(x )
         layer_outputs.append(x)
         layer_names.append("conv_3")
         
-        x = self.conv_4(x , 4)
+        x = self.conv_4(x)
         layer_outputs.append(x)
         layer_names.append("conv_4")
         
@@ -739,15 +739,15 @@ class VGG_SNN(tf.keras.Model):
         layer_outputs.append(x)
         layer_names.append("pool_2")
         
-        x = self.conv_5(x , 5)
+        x = self.conv_5(x )
         layer_outputs.append(x)
         layer_names.append("conv_5")
         
-        x = self.conv_6(x , 6)
+        x = self.conv_6(x )
         layer_outputs.append(x)
         layer_names.append("conv_6")
         
-        x = self.conv_7(x , 7)
+        x = self.conv_7(x )
         layer_outputs.append(x)
         layer_names.append("conv_7")
         
@@ -755,15 +755,15 @@ class VGG_SNN(tf.keras.Model):
         layer_outputs.append(x)
         layer_names.append("pool_3")
         
-        x = self.conv_8(x , 8)
+        x = self.conv_8(x )
         layer_outputs.append(x)
         layer_names.append("conv_8")
         
-        x = self.conv_9(x, 9)
+        x = self.conv_9(x)
         layer_outputs.append(x)
         layer_names.append("conv_9")
         
-        x = self.conv_10(x , 10)
+        x = self.conv_10(x )
         layer_outputs.append(x)
         layer_names.append("conv_10")
         
@@ -771,15 +771,15 @@ class VGG_SNN(tf.keras.Model):
         layer_outputs.append(x)
         layer_names.append("pool_4")
         
-        x = self.conv_11(x , 11)
+        x = self.conv_11(x )
         layer_outputs.append(x)
         layer_names.append("conv_11")
         
-        x = self.conv_12(x , 12)
+        x = self.conv_12(x )
         layer_outputs.append(x)
         layer_names.append("conv_12")
         
-        x = self.conv_13(x , 13)
+        x = self.conv_13(x)
         layer_outputs.append(x)
         layer_names.append("conv_13")
         
@@ -791,11 +791,11 @@ class VGG_SNN(tf.keras.Model):
         layer_outputs.append(x)
         layer_names.append("flatten")
         
-        x = self.dense_1(x , 14)
+        x = self.dense_1(x )
         layer_outputs.append(x)
         layer_names.append("dense_1")
         
-        out = self.dense_out(x , 15)
+        out = self.dense_out(x )
         layer_outputs.append(out)
         layer_names.append("dense_out")
 
